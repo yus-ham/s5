@@ -28,7 +28,9 @@ const common = {
 		}
 
 		return input;
-	})
+	}),
+
+	parserPlugin: fun(() => ({})),
 };
 
 export const validate_module_options =

@@ -37,6 +37,8 @@
       "require": "./compiler/index.js",
       "default": "./src/compiler/index.js"
     },
+    "./compiler/parse-read/*": "./src/compiler/phases/1-parse/read/*",
+    "./compiler/parse-utils/*": "./src/compiler/phases/1-parse/utils/*",
     "./easing": {
       "types": "./types/index.d.ts",
       "default": "./src/easing/index.js"

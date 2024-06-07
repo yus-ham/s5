@@ -41,8 +41,11 @@ export class Parser {
 	/** @type {LastAutoClosedTag | undefined} */
 	last_auto_closed_tag;
 
+	/** @type {Record<string, Function>} */
+	plugin = {};
+	
 	/** @param {string} template */
-	constructor(template) {
+	constructor(template, options = {}) {
 		if (typeof template !== 'string') {
 			throw new TypeError('Template must be a string');
 		}
@@ -75,6 +78,8 @@ export class Parser {
 
 		this.stack.push(this.root);
 		this.fragments.push(this.root.fragment);
+
+		this.setPlugin(options)
 
 		/** @type {ParserState} */
 		let state = fragment;
@@ -130,6 +135,24 @@ export class Parser {
 				value: options,
 				enumerable: false
 			});
+		}
+	}
+
+	/**
+	 * @param {{
+	 * 	plugin: Function;
+	 * }} options 
+	 */
+	setPlugin(options) {
+		this.plugin = options.plugin() || {};
+
+		if (!this.plugin.state) {
+			this.plugin.state = () => void 0;
+		}
+
+		if (!this.plugin.append) {
+			/** @param {Record<string, any>} node*/
+			this.plugin.append = (node) => node;
 		}
 	}
 
@@ -261,9 +284,13 @@ export class Parser {
 	/**
 	 * @template T
 	 * @param {Omit<T, 'prev' | 'parent'>} node
-	 * @returns {T}
+	 * @returns {T|undefined}
 	 */
 	append(node) {
+		if (!this.plugin.append(node)) {
+			return;
+		}
+
 		const current = this.current();
 		const fragment = this.fragments.at(-1);
 
@@ -291,8 +318,8 @@ export class Parser {
  * @param {string} template
  * @returns {import('#compiler').Root}
  */
-export function parse(template) {
-	const parser = new Parser(template);
+export function parse(template, options) {
+	const parser = new Parser(template, options);
 	return parser.root;
 }
 

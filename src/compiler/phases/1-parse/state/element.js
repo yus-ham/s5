@@ -324,17 +324,20 @@ export default function tag(parser) {
 
 			if (content.context === 'module') {
 				if (current.module) e.script_duplicate(start);
-				current.module = content;
+				if (parser.plugin.append(content))
+					current.module = content;
 			} else {
 				if (current.instance) e.script_duplicate(start);
-				current.instance = content;
+				if (parser.plugin.append(content))
+					current.instance = content;
 			}
 		} else {
 			const content = read_style(parser, start, element.attributes);
 			content.content.comment = prev_comment;
 
 			if (current.css) e.style_duplicate(start);
-			current.css = content;
+			if (parser.plugin.append(content))
+				current.css = content;
 		}
 		return;
 	}

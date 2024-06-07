@@ -21,7 +21,7 @@ export function compile(source, options) {
 	const validated = validate_component_options(options, '');
 	state.reset(source, validated);
 
-	let parsed = _parse(source);
+	let parsed = _parse(source, {plugin: validated.parserPlugin});
 
 	const { customElement: customElementOptions, ...parsed_options } = parsed.options || {};
 
