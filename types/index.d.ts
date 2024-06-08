@@ -1989,25 +1989,210 @@ declare module 'svelte/legacy' {
 	 * @deprecated Use this only as a temporary solution to migrate your imperative component code to Svelte 5.
 	 *
 	 * */
-	export function createClassComponent<Props extends Record<string, any>, Exports extends Record<string, any>, Events extends Record<string, any>, Slots extends Record<string, any>>(options: import("svelte").ComponentConstructorOptions<Props> & {
-		component: import("svelte").ComponentType<import("svelte").SvelteComponent<Props, Events, Slots>> | import("svelte").Component<Props, any, string>;
+	export function createClassComponent<Props extends Record<string, any>, Exports extends Record<string, any>, Events extends Record<string, any>, Slots extends Record<string, any>>(options: ComponentConstructorOptions<Props> & {
+		component: ComponentType<SvelteComponent<Props, Events, Slots>> | Component<Props, any, string>;
 		immutable?: boolean | undefined;
 		hydrate?: boolean | undefined;
 		recover?: boolean | undefined;
-	}): import("svelte").SvelteComponent<Props, Events, Slots> & Exports;
+	}): SvelteComponent<Props, Events, Slots> & Exports;
 	/**
 	 * Takes the component function and returns a Svelte 4 compatible component constructor.
 	 *
 	 * @deprecated Use this only as a temporary solution to migrate your imperative component code to Svelte 5.
 	 *
 	 * */
-	export function asClassComponent<Props extends Record<string, any>, Exports extends Record<string, any>, Events extends Record<string, any>, Slots extends Record<string, any>>(component: import("svelte").SvelteComponent<Props, Events, Slots> | import("svelte").Component<Props, any, string>): import("svelte").ComponentType<import("svelte").SvelteComponent<Props, Events, Slots> & Exports>;
+	export function asClassComponent<Props extends Record<string, any>, Exports extends Record<string, any>, Events extends Record<string, any>, Slots extends Record<string, any>>(component: SvelteComponent<Props, Events, Slots> | Component<Props, any, string>): ComponentType<SvelteComponent<Props, Events, Slots> & Exports>;
 	/**
 	 * Runs the given function once immediately on the server, and works like `$effect.pre` on the client.
 	 *
 	 * @deprecated Use this only as a temporary solution to migrate your component code to Svelte 5.
 	 * */
 	export function run(fn: () => void | (() => void)): void;
+	/**
+	 * @deprecated In Svelte 4, components are classes. In Svelte 5, they are functions.
+	 * Use `mount` or `createRoot` instead to instantiate components.
+	 * See [breaking changes](https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes)
+	 * for more info.
+	 */
+	interface ComponentConstructorOptions<
+		Props extends Record<string, any> = Record<string, any>
+	> {
+		target: Element | Document | ShadowRoot;
+		anchor?: Element;
+		props?: Props;
+		context?: Map<any, any>;
+		hydrate?: boolean;
+		intro?: boolean;
+		$$inline?: boolean;
+	}
+
+	/**
+	 * Utility type for ensuring backwards compatibility on a type level that if there's a default slot, add 'children' to the props
+	 */
+	type Properties<Props, Slots> = Props &
+		(Slots extends { default: any }
+			? // This is unfortunate because it means "accepts no props" turns into "accepts any prop"
+				// but the alternative is non-fixable type errors because of the way TypeScript index
+				// signatures work (they will always take precedence and make an impossible-to-satisfy children type).
+				Props extends Record<string, never>
+				? any
+				: { children?: any }
+			: {});
+
+	/**
+	 * This was the base class for Svelte components in Svelte 4. Svelte 5+ components
+	 * are completely different under the hood. For typing, use `Component` instead.
+	 * To instantiate components, use `mount` or `createRoot`.
+	 * See [breaking changes documentation](https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes) for more info.
+	 */
+	class SvelteComponent<
+		Props extends Record<string, any> = Record<string, any>,
+		Events extends Record<string, any> = any,
+		Slots extends Record<string, any> = any
+	> {
+		/** The custom element version of the component. Only present if compiled with the `customElement` compiler option */
+		static element?: typeof HTMLElement;
+
+		[prop: string]: any;
+		/**
+		 * @deprecated This constructor only exists when using the `asClassComponent` compatibility helper, which
+		 * is a stop-gap solution. Migrate towards using `mount` or `createRoot` instead. See
+		 * https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes for more info.
+		 */
+		constructor(options: ComponentConstructorOptions<Properties<Props, Slots>>);
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$prop_def: Props; // Without Properties: unnecessary, causes type bugs
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$events_def: Events;
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$slot_def: Slots;
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$bindings?: string;
+
+		/**
+		 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+		 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+		 * for more info.
+		 */
+		$destroy(): void;
+
+		/**
+		 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+		 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+		 * for more info.
+		 */
+		$on<K extends Extract<keyof Events, string>>(
+			type: K,
+			callback: (e: Events[K]) => void
+		): () => void;
+
+		/**
+		 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+		 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+		 * for more info.
+		 */
+		$set(props: Partial<Props>): void;
+	}
+
+	/**
+	 * Can be used to create strongly typed Svelte components.
+	 *
+	 * #### Example:
+	 *
+	 * You have component library on npm called `component-library`, from which
+	 * you export a component called `MyComponent`. For Svelte+TypeScript users,
+	 * you want to provide typings. Therefore you create a `index.d.ts`:
+	 * ```ts
+	 * import { Component } from "svelte";
+	 * export declare const MyComponent: Component<{ foo: string }> {}
+	 * ```
+	 * Typing this makes it possible for IDEs like VS Code with the Svelte extension
+	 * to provide intellisense and to use the component like this in a Svelte file
+	 * with TypeScript:
+	 * ```svelte
+	 * <script lang="ts">
+	 * 	import { MyComponent } from "component-library";
+	 * </script>
+	 * <MyComponent foo={'bar'} />
+	 * ```
+	 */
+	interface Component<
+		Props extends Record<string, any> = {},
+		Exports extends Record<string, any> = {},
+		Bindings extends keyof Props | '' = string
+	> {
+		/**
+		 * @param internal An internal object used by Svelte. Do not use or modify.
+		 * @param props The props passed to the component.
+		 */
+		(
+			internal: unknown,
+			props: Props
+		): {
+			/**
+			 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+			 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+			 * for more info.
+			 */
+			$on?(type: string, callback: (e: any) => void): () => void;
+			/**
+			 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+			 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+			 * for more info.
+			 */
+			$set?(props: Partial<Props>): void;
+		} & Exports;
+		/** The custom element version of the component. Only present if compiled with the `customElement` compiler option */
+		element?: typeof HTMLElement;
+		/** Does not exist at runtime, for typing capabilities only. DO NOT USE */
+		z_$$bindings?: Bindings;
+	}
+
+	/**
+	 * @deprecated This type is obsolete when working with the new `Component` type.
+	 *
+	 * Convenience type to get the type of a Svelte component. Useful for example in combination with
+	 * dynamic components using `<svelte:component>`.
+	 *
+	 * Example:
+	 * ```html
+	 * <script lang="ts">
+	 * 	import type { ComponentType, SvelteComponent } from 'svelte';
+	 * 	import Component1 from './Component1.svelte';
+	 * 	import Component2 from './Component2.svelte';
+	 *
+	 * 	const component: ComponentType = someLogic() ? Component1 : Component2;
+	 * 	const componentOfCertainSubType: ComponentType<SvelteComponent<{ needsThisProp: string }>> = someLogic() ? Component1 : Component2;
+	 * </script>
+	 *
+	 * <svelte:component this={component} />
+	 * <svelte:component this={componentOfCertainSubType} needsThisProp="hello" />
+	 * ```
+	 */
+	type ComponentType<Comp extends SvelteComponent = SvelteComponent> = (new (
+		options: ComponentConstructorOptions<
+			Comp extends SvelteComponent<infer Props> ? Props : Record<string, any>
+		>
+	) => Comp) & {
+		/** The custom element version of the component. Only present if compiled with the `customElement` compiler option */
+		element?: typeof HTMLElement;
+	};
 }
 
 declare module 'svelte/motion' {
@@ -2108,7 +2293,7 @@ declare module 'svelte/reactivity' {
 }
 
 declare module 'svelte/server' {
-	export function render(component: typeof import('svelte').SvelteComponent, options: {
+	export function render(component: SvelteComponent, options: {
 		props: Record<string, any>;
 		context?: Map<any, any>;
 	}): RenderOutput;
@@ -2119,6 +2304,107 @@ declare module 'svelte/server' {
 		html: string;
 		/** HTML that goes somewhere into the `<body>` */
 		body: string;
+	}
+	/**
+	 * @deprecated In Svelte 4, components are classes. In Svelte 5, they are functions.
+	 * Use `mount` or `createRoot` instead to instantiate components.
+	 * See [breaking changes](https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes)
+	 * for more info.
+	 */
+	interface ComponentConstructorOptions<
+		Props extends Record<string, any> = Record<string, any>
+	> {
+		target: Element | Document | ShadowRoot;
+		anchor?: Element;
+		props?: Props;
+		context?: Map<any, any>;
+		hydrate?: boolean;
+		intro?: boolean;
+		$$inline?: boolean;
+	}
+
+	/**
+	 * Utility type for ensuring backwards compatibility on a type level that if there's a default slot, add 'children' to the props
+	 */
+	type Properties<Props, Slots> = Props &
+		(Slots extends { default: any }
+			? // This is unfortunate because it means "accepts no props" turns into "accepts any prop"
+				// but the alternative is non-fixable type errors because of the way TypeScript index
+				// signatures work (they will always take precedence and make an impossible-to-satisfy children type).
+				Props extends Record<string, never>
+				? any
+				: { children?: any }
+			: {});
+
+	/**
+	 * This was the base class for Svelte components in Svelte 4. Svelte 5+ components
+	 * are completely different under the hood. For typing, use `Component` instead.
+	 * To instantiate components, use `mount` or `createRoot`.
+	 * See [breaking changes documentation](https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes) for more info.
+	 */
+	class SvelteComponent<
+		Props extends Record<string, any> = Record<string, any>,
+		Events extends Record<string, any> = any,
+		Slots extends Record<string, any> = any
+	> {
+		/** The custom element version of the component. Only present if compiled with the `customElement` compiler option */
+		static element?: typeof HTMLElement;
+
+		[prop: string]: any;
+		/**
+		 * @deprecated This constructor only exists when using the `asClassComponent` compatibility helper, which
+		 * is a stop-gap solution. Migrate towards using `mount` or `createRoot` instead. See
+		 * https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes for more info.
+		 */
+		constructor(options: ComponentConstructorOptions<Properties<Props, Slots>>);
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$prop_def: Props; // Without Properties: unnecessary, causes type bugs
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$events_def: Events;
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$slot_def: Slots;
+		/**
+		 * For type checking capabilities only.
+		 * Does not exist at runtime.
+		 * ### DO NOT USE!
+		 */
+		$$bindings?: string;
+
+		/**
+		 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+		 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+		 * for more info.
+		 */
+		$destroy(): void;
+
+		/**
+		 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+		 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+		 * for more info.
+		 */
+		$on<K extends Extract<keyof Events, string>>(
+			type: K,
+			callback: (e: Events[K]) => void
+		): () => void;
+
+		/**
+		 * @deprecated This method only exists when using one of the legacy compatibility helpers, which
+		 * is a stop-gap solution. See https://svelte-5-preview.vercel.app/docs/breaking-changes#components-are-no-longer-classes
+		 * for more info.
+		 */
+		$set(props: Partial<Props>): void;
 	}
 }
 
