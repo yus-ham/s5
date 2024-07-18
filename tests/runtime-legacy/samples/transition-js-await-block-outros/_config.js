@@ -14,6 +14,7 @@ export default test({
 	intro: true,
 
 	async test({ assert, target, component, raf }) {
+		await Promise.resolve();
 		assert.htmlEqual(target.innerHTML, '<p class="pending" foo="0.0">loading...</p>');
 
 		let time = 0;
@@ -118,9 +119,8 @@ export default test({
 		assert.htmlEqual(
 			target.innerHTML,
 			`
-			<p class="then" foo="0.5">43</p>
+			<p class="then" foo="0.5">44</p>
 			<p class="pending" foo="0.5">loading...</p>
-			<p class="then" foo="0.0">44</p>
 		`
 		);
 
@@ -159,9 +159,8 @@ export default test({
 		assert.htmlEqual(
 			target.innerHTML,
 			`
-			<p class="then" foo="0.6">44</p>
+			<p class="then" foo="0.6">45</p>
 			<p class="pending" foo="0.4">loading...</p>
-			<p class="then" foo="0.0">45</p>
 		`
 		);
 
@@ -169,9 +168,8 @@ export default test({
 		assert.htmlEqual(
 			target.innerHTML,
 			`
-			<p class="then" foo="0.4">44</p>
+			<p class="then" foo="0.8">45</p>
 			<p class="pending" foo="0.2">loading...</p>
-			<p class="then" foo="0.2">45</p>
 		`
 		);
 
@@ -183,10 +181,8 @@ export default test({
 		assert.htmlEqual(
 			target.innerHTML,
 			`
-			<p class="then" foo="0.4">44</p>
+			<p class="then" foo="0.8">45</p>
 			<p class="pending" foo="0.2">loading...</p>
-			<p class="then" foo="0.2">45</p>
-			<p class="pending" foo="0.0">loading...</p>
 		`
 		);
 
@@ -195,10 +191,8 @@ export default test({
 		assert.htmlEqual(
 			target.innerHTML,
 			`
-			<p class="then" foo="0.3">44</p>
-			<p class="pending" foo="0.1">loading...</p>
-			<p class="then" foo="0.1">45</p>
-			<p class="pending" foo="0.1">loading...</p>
+			<p class="then" foo="0.7">45</p>
+			<p class="pending" foo="0.3">loading...</p>
 		`
 		);
 
@@ -207,11 +201,8 @@ export default test({
 		assert.htmlEqual(
 			target.innerHTML,
 			`
-			<p class="then" foo="0.3">44</p>
-			<p class="pending" foo="0.1">loading...</p>
-			<p class="then" foo="0.1">45</p>
-			<p class="pending" foo="0.1">loading...</p>
-			<p class="then" foo="0.0">46</p>
+			<p class="then" foo="0.7">46</p>
+			<p class="pending" foo="0.3">loading...</p>
 		`
 		);
 
@@ -219,20 +210,12 @@ export default test({
 		assert.htmlEqual(
 			target.innerHTML,
 			`
-			<p class="then" foo="0.2">44</p>
-			<p class="then" foo="0.1">46</p>
+			<p class="then" foo="0.8">46</p>
+			<p class="pending" foo="0.2">loading...</p>
 		`
 		);
 
 		raf.tick((time += 20));
-		assert.htmlEqual(
-			target.innerHTML,
-			`
-			<p class="then" foo="0.3">46</p>
-		`
-		);
-
-		raf.tick((time += 70));
 		assert.htmlEqual(
 			target.innerHTML,
 			`

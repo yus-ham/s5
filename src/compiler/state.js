@@ -1,8 +1,10 @@
+/** @import { CompileOptions, SvelteNode } from './types' */
+/** @import { Warning } from '#compiler' */
 import { getLocator } from 'locate-character';
 
 /** @typedef {{ start?: number, end?: number }} NodeLike */
 
-/** @type {import('#compiler').Warning[]} */
+/** @type {Warning[]} */
 export let warnings = [];
 
 /**
@@ -12,7 +14,16 @@ export let warnings = [];
  */
 export let filename;
 
+/**
+ * The original source code
+ * @type {string}
+ */
+export let source;
+
 export let locator = getLocator('', { offsetLine: 1 });
+
+/** @type {NonNullable<CompileOptions['warningFilter']>} */
+export let warning_filter;
 
 /**
  * The current stack of ignored warnings
@@ -24,7 +35,7 @@ export let ignore_stack = [];
  * For each node the list of warnings that should be ignored for that node.
  * Exists in addition to `ignore_stack` because not all warnings are emitted
  * while the stack is being built.
- * @type {Map<import("./types").SvelteNode | NodeLike, Set<string>[]>}
+ * @type {Map<SvelteNode | NodeLike, Set<string>[]>}
  */
 export let ignore_map = new Map();
 
@@ -41,10 +52,19 @@ export function pop_ignore() {
 }
 
 /**
- * @param {string} source
+ *
+ * @param {(warning: Warning) => boolean} fn
+ */
+export function reset_warning_filter(fn = () => true) {
+	warning_filter = fn;
+}
+
+/**
+ * @param {string} _source
  * @param {{ filename?: string, rootDir?: string }} options
  */
-export function reset(source, options) {
+export function reset(_source, options) {
+	source = _source;
 	const root_dir = options.rootDir?.replace(/\\/g, '/');
 	filename = options.filename?.replace(/\\/g, '/');
 

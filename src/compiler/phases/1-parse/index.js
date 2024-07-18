@@ -1,8 +1,9 @@
+/** @import { TemplateNode, Fragment, Root, SvelteOptionsRaw } from '#compiler' */
 // @ts-expect-error acorn type definitions are borked in the release we use
 import { isIdentifierStart, isIdentifierChar } from 'acorn';
 import fragment from './state/fragment.js';
 import { regex_whitespace } from '../patterns.js';
-import { reserved } from './utils/names.js';
+import { reserved } from '../../../constants.js';
 import full_char_code_at from './utils/full_char_code_at.js';
 import * as e from '../../errors.js';
 import { create_fragment } from './utils/create.js';
@@ -26,13 +27,13 @@ export class Parser {
 	/** Whether we're parsing in TypeScript mode */
 	ts = false;
 
-	/** @type {import('#compiler').TemplateNode[]} */
+	/** @type {TemplateNode[]} */
 	stack = [];
 
-	/** @type {import('#compiler').Fragment[]} */
+	/** @type {Fragment[]} */
 	fragments = [];
 
-	/** @type {import('#compiler').Root} */
+	/** @type {Root} */
 	root;
 
 	/** @type {Record<string, boolean>} */
@@ -41,16 +42,20 @@ export class Parser {
 	/** @type {LastAutoClosedTag | undefined} */
 	last_auto_closed_tag;
 
-	/** @type {Record<string, Function>} */
+	/** @type {ParserPlugin} */
 	plugin = {};
 	
-	/** @param {string} template */
+	/**
+	 * @param {string} template
+	 * @param {ParserOptions} options
+	 */
 	constructor(template, options = {}) {
 		if (typeof template !== 'string') {
 			throw new TypeError('Template must be a string');
 		}
 
 		this.template = template.trimEnd();
+		// console.info({template: this.template})
 
 		let match_lang;
 
@@ -125,9 +130,7 @@ export class Parser {
 			(thing) => thing.type === 'SvelteOptions'
 		);
 		if (options_index !== -1) {
-			const options = /** @type {import('#compiler').SvelteOptionsRaw} */ (
-				this.root.fragment.nodes[options_index]
-			);
+			const options = /** @type {SvelteOptionsRaw} */ (this.root.fragment.nodes[options_index]);
 			this.root.fragment.nodes.splice(options_index, 1);
 			this.root.options = read_options(options);
 			// We need this for the old AST format
@@ -139,9 +142,7 @@ export class Parser {
 	}
 
 	/**
-	 * @param {{
-	 * 	plugin: Function;
-	 * }} options 
+	 * @param {ParserOptions} options 
 	 */
 	setPlugin(options) {
 		this.plugin = options.plugin() || {};
@@ -188,6 +189,7 @@ export class Parser {
 	/** @param {string} str */
 	match(str) {
 		const length = str.length;
+		// console.info('match', {str, result:this.template.slice(this.index, this.index + length) === str})
 		if (length === 1) {
 			// more performant than slicing
 			return this.template[this.index] === str;
@@ -316,7 +318,8 @@ export class Parser {
 
 /**
  * @param {string} template
- * @returns {import('#compiler').Root}
+ * @param {ParserOptions} options
+ * @returns {Root}
  */
 export function parse(template, options) {
 	const parser = new Parser(template, options);
@@ -324,6 +327,12 @@ export function parse(template, options) {
 }
 
 /** @typedef {(parser: Parser) => ParserState | void} ParserState */
+
+/** @typedef {Record<string, Function>} ParserPlugin */
+
+/** @typedef {Object} ParserOptions
+ * @property {() => ParserPlugin} [plugin]
+ */
 
 /** @typedef {Object} LastAutoClosedTag
  * @property {string} tag

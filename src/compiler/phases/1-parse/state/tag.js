@@ -3,6 +3,7 @@ import read_expression from '../read/expression.js';
 import * as e from '../../../errors.js';
 import { create_fragment } from '../utils/create.js';
 import { walk } from 'zimmerframe';
+import { parse_expression_at } from '../acorn.js';
 
 const regex_whitespace_with_closing_curly_brace = /^\s*}/;
 
@@ -14,9 +15,14 @@ export default function tag(parser) {
 	parser.allow_whitespace();
 
 	if (parser.eat('#')) return open(parser);
-	if (parser.eat('/')) return close(parser);
 	if (parser.eat(':')) return next(parser);
 	if (parser.eat('@')) return special(parser);
+	if (parser.match('/')) {
+		if (!parser.match('/*') && !parser.match('//')) {
+			parser.eat('/');
+			return close(parser);
+		}
+	}
 
 	const expression = read_expression(parser);
 
@@ -38,7 +44,8 @@ export default function tag(parser) {
 
 /** @param {import('../index.js').Parser} parser */
 function open(parser) {
-	const start = parser.index - 2;
+	let start = parser.index - 2;
+	while (parser.template[start] !== '{') start -= 1;
 
 	if (parser.eat('if')) {
 		parser.require_whitespace();
@@ -268,36 +275,27 @@ function open(parser) {
 			e.expected_identifier(parser.index);
 		}
 
-		parser.eat('(', true);
-
 		parser.allow_whitespace();
 
-		/** @type {import('estree').Pattern[]} */
-		const parameters = [];
+		const params_start = parser.index;
 
-		while (!parser.match(')')) {
-			let pattern = read_pattern(parser, true);
+		parser.eat('(', true);
+		let parentheses = 1;
 
-			parser.allow_whitespace();
-			if (parser.eat('=')) {
-				parser.allow_whitespace();
-				const right = read_expression(parser);
-				pattern = {
-					type: 'AssignmentPattern',
-					left: pattern,
-					right: right,
-					start: pattern.start,
-					end: right.end
-				};
-			}
-
-			parameters.push(pattern);
-
-			if (!parser.eat(',')) break;
-			parser.allow_whitespace();
+		while (parser.index < parser.template.length && (!parser.match(')') || parentheses !== 1)) {
+			if (parser.match('(')) parentheses++;
+			if (parser.match(')')) parentheses--;
+			parser.index += 1;
 		}
 
 		parser.eat(')', true);
+
+		const prelude = parser.template.slice(0, params_start).replace(/\S/g, ' ');
+		const params = parser.template.slice(params_start, parser.index);
+
+		let function_expression = /** @type {import('estree').ArrowFunctionExpression} */ (
+			parse_expression_at(prelude + `${params} => {}`, parser.ts, params_start)
+		);
 
 		parser.allow_whitespace();
 		parser.eat('}', true);
@@ -313,10 +311,9 @@ function open(parser) {
 				end: name_end,
 				name
 			},
-			parameters,
+			parameters: function_expression.params,
 			body: create_fragment()
 		});
-
 		parser.stack.push(block);
 		parser.fragments.push(block.body);
 
@@ -352,9 +349,12 @@ function next(parser) {
 			parser.allow_whitespace();
 			parser.eat('}', true);
 
+			let elseif_start = start - 1;
+			while (parser.template[elseif_start] !== '{') elseif_start -= 1;
+
 			/** @type {ReturnType<typeof parser.append<import('#compiler').IfBlock>>} */
 			const child = parser.append({
-				start: parser.index,
+				start: elseif_start,
 				end: -1,
 				type: 'IfBlock',
 				elseif: true,
@@ -603,7 +603,11 @@ function special(parser) {
 			type: 'RenderTag',
 			start,
 			end: parser.index,
-			expression: expression
+			expression: expression,
+			metadata: {
+				dynamic: false,
+				args_with_call_expression: new Set()
+			}
 		});
 	}
 }

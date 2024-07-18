@@ -3,7 +3,12 @@ import { walk } from 'zimmerframe';
 import { is_element_node } from './nodes.js';
 import * as b from '../utils/builders.js';
 import * as e from '../errors.js';
-import { extract_identifiers, extract_identifiers_from_destructuring } from '../utils/ast.js';
+import {
+	extract_identifiers,
+	extract_identifiers_from_destructuring,
+	object,
+	unwrap_pattern
+} from '../utils/ast.js';
 import { JsKeywords, Runes } from './constants.js';
 
 export class Scope {
@@ -381,16 +386,20 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		Component(node, { state, visit, path }) {
 			state.scope.reference(b.id(node.name), path);
 
-			for (const attribute of node.attributes) {
-				visit(attribute);
-			}
-
 			// let:x is super weird:
 			// - for the default slot, its scope only applies to children that are not slots themselves
 			// - for named slots, its scope applies to the component itself, too
 			const [scope, is_default_slot] = analyze_let_directives(node, state.scope);
-			if (!is_default_slot) {
+			if (is_default_slot) {
+				for (const attribute of node.attributes) {
+					visit(attribute);
+				}
+			} else {
 				scopes.set(node, scope);
+
+				for (const attribute of node.attributes) {
+					visit(attribute, { ...state, scope });
+				}
 			}
 
 			for (const child of node.fragment.nodes) {
@@ -613,7 +622,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 					scopes.set(node.value, value_scope);
 					context.visit(node.value, { scope: value_scope });
 					for (const id of extract_identifiers(node.value)) {
-						then_scope.declare(id, 'normal', 'const');
+						then_scope.declare(id, 'derived', 'const');
 						value_scope.declare(id, 'normal', 'const');
 					}
 				}
@@ -627,7 +636,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 					scopes.set(node.error, error_scope);
 					context.visit(node.error, { scope: error_scope });
 					for (const id of extract_identifiers(node.error)) {
-						catch_scope.declare(id, 'normal', 'const');
+						catch_scope.declare(id, 'derived', 'const');
 						error_scope.declare(id, 'normal', 'const');
 					}
 				}
@@ -674,7 +683,18 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 
 		TransitionDirective: SvelteDirective,
 		AnimateDirective: SvelteDirective,
-		UseDirective: SvelteDirective
+		UseDirective: SvelteDirective,
+		// using it's own function instead of `SvelteDirective` because
+		// StyleDirective doesn't have expressions and are generally already
+		// handled by `Identifier`. This is the special case for the shorthand
+		// eg <button style:height /> where the variable has the same name of
+		// the css property
+		StyleDirective(node, { path, state, next }) {
+			if (node.value === true) {
+				state.scope.reference(b.id(node.name), path);
+			}
+			next();
+		}
 
 		// TODO others
 	});
@@ -702,11 +722,14 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 			const binding = scope.get(/** @type {import('estree').Identifier} */ (object).name);
 			if (binding) binding.mutated = true;
 		} else {
-			extract_identifiers(node).forEach((identifier) => {
-				const binding = scope.get(identifier.name);
-				if (binding && identifier !== binding.node) {
+			unwrap_pattern(node).forEach((node) => {
+				let id = node.type === 'Identifier' ? node : object(node);
+				if (id === null) return;
+
+				const binding = scope.get(id.name);
+				if (binding && id !== binding.node) {
 					binding.mutated = true;
-					binding.reassigned = true;
+					binding.reassigned = node.type === 'Identifier';
 				}
 			});
 		}

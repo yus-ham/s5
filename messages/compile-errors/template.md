@@ -88,6 +88,10 @@
 
 > Block was left open
 
+## block_unexpected_character
+
+> Expected a `%character%` character immediately following the opening bracket
+
 ## block_unexpected_close
 
 > Unexpected block closing tag
@@ -246,7 +250,7 @@
 
 ## snippet_invalid_rest_parameter
 
-> snippets do not support rest parameters; use an array instead
+> Snippets do not support rest parameters; use an array instead
 
 ## snippet_shadowing_prop
 

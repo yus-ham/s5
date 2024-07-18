@@ -1,5 +1,5 @@
 import { current_component_context, flush_sync, untrack } from './internal/client/runtime.js';
-import { is_array } from './internal/client/utils.js';
+import { is_array } from './internal/shared/utils.js';
 import { user_effect } from './internal/client/index.js';
 import * as e from './internal/client/errors.js';
 import { lifecycle_outside_component } from './internal/shared/errors.js';
@@ -190,3 +190,5 @@ export {
 	tick,
 	untrack
 } from './internal/client/runtime.js';
+
+export { createRawSnippet } from './internal/client/dom/blocks/snippet.js';

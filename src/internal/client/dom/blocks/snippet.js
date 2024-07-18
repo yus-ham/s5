@@ -1,24 +1,31 @@
+/** @import { Snippet } from 'svelte' */
+/** @import { Effect, TemplateNode } from '#client' */
+/** @import { Getters } from '#shared' */
 import { add_snippet_symbol } from '../../../shared/validate.js';
 import { EFFECT_TRANSPARENT } from '../../constants.js';
-import { branch, block, destroy_effect } from '../../reactivity/effects.js';
+import { branch, block, destroy_effect, teardown } from '../../reactivity/effects.js';
 import {
-	current_component_context,
 	dev_current_component_function,
 	set_dev_current_component_function
 } from '../../runtime.js';
+import { hydrate_next, hydrate_node, hydrating } from '../hydration.js';
+import { create_fragment_from_html } from '../reconciler.js';
+import { assign_nodes } from '../template.js';
 
 /**
- * @template {(node: import('#client').TemplateNode, ...args: any[]) => import('#client').Dom} SnippetFn
+ * @template {(node: TemplateNode, ...args: any[]) => void} SnippetFn
+ * @param {TemplateNode} node
  * @param {() => SnippetFn | null | undefined} get_snippet
- * @param {import('#client').TemplateNode} node
  * @param {(() => any)[]} args
  * @returns {void}
  */
-export function snippet(get_snippet, node, ...args) {
+export function snippet(node, get_snippet, ...args) {
+	var anchor = node;
+
 	/** @type {SnippetFn | null | undefined} */
 	var snippet;
 
-	/** @type {import('#client').Effect | null} */
+	/** @type {Effect | null} */
 	var snippet_effect;
 
 	block(() => {
@@ -30,29 +37,66 @@ export function snippet(get_snippet, node, ...args) {
 		}
 
 		if (snippet) {
-			snippet_effect = branch(() => /** @type {SnippetFn} */ (snippet)(node, ...args));
+			snippet_effect = branch(() => /** @type {SnippetFn} */ (snippet)(anchor, ...args));
 		}
 	}, EFFECT_TRANSPARENT);
+
+	if (hydrating) {
+		anchor = hydrate_node;
+	}
 }
 
 /**
  * In development, wrap the snippet function so that it passes validation, and so that the
  * correct component context is set for ownership checks
- * @param {(node: import('#client').TemplateNode, ...args: any[]) => import('#client').Dom} fn
- * @returns
+ * @param {any} component
+ * @param {(node: TemplateNode, ...args: any[]) => void} fn
  */
-export function wrap_snippet(fn) {
-	let component = /** @type {import('#client').ComponentContext} */ (current_component_context);
+export function wrap_snippet(component, fn) {
+	return add_snippet_symbol((/** @type {TemplateNode} */ node, /** @type {any[]} */ ...args) => {
+		var previous_component_function = dev_current_component_function;
+		set_dev_current_component_function(component);
 
+		try {
+			return fn(node, ...args);
+		} finally {
+			set_dev_current_component_function(previous_component_function);
+		}
+	});
+}
+
+/**
+ * Create a snippet programmatically
+ * @template {unknown[]} Params
+ * @param {(...params: Getters<Params>) => {
+ *   render: () => string
+ *   setup?: (element: Element) => void
+ * }} fn
+ * @returns {Snippet<Params>}
+ */
+export function createRawSnippet(fn) {
 	return add_snippet_symbol(
-		(/** @type {import('#client').TemplateNode} */ node, /** @type {any[]} */ ...args) => {
-			var previous_component_function = dev_current_component_function;
-			set_dev_current_component_function(component.function);
+		(/** @type {TemplateNode} */ anchor, /** @type {Getters<Params>} */ ...params) => {
+			var snippet = fn(...params);
 
-			try {
-				return fn(node, ...args);
-			} finally {
-				set_dev_current_component_function(previous_component_function);
+			/** @type {Element} */
+			var element;
+
+			if (hydrating) {
+				element = /** @type {Element} */ (hydrate_node);
+				hydrate_next();
+			} else {
+				var html = snippet.render().trim();
+				var fragment = create_fragment_from_html(html);
+				element = /** @type {Element} */ (fragment.firstChild);
+				anchor.before(element);
+			}
+
+			const result = snippet.setup?.(element);
+			assign_nodes(element, element);
+
+			if (typeof result === 'function') {
+				teardown(result);
 			}
 		}
 	);

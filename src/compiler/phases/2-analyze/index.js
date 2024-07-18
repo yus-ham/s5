@@ -8,7 +8,8 @@ import {
 	extract_paths,
 	is_event_attribute,
 	is_text_attribute,
-	object
+	object,
+	unwrap_optional
 } from '../../utils/ast.js';
 import * as b from '../../utils/builders.js';
 import { MathMLElements, ReservedKeywords, Runes, SVGElements } from '../constants.js';
@@ -27,10 +28,11 @@ import {
 import { should_proxy_or_freeze } from '../3-transform/client/utils.js';
 import { analyze_css } from './css/css-analyze.js';
 import { prune } from './css/css-prune.js';
-import { hash } from './utils.js';
+import { hash } from '../../../utils.js';
 import { warn_unused } from './css/css-warn.js';
 import { extract_svelte_ignore } from '../../utils/extract_svelte_ignore.js';
 import { ignore_map, ignore_stack, pop_ignore, push_ignore } from '../../state.js';
+import { equal } from '../../utils/assert.js';
 
 /**
  * @param {import('#compiler').Script | null} script
@@ -111,23 +113,24 @@ function get_delegated_event(event_name, handler, context) {
 		if (binding != null) {
 			for (const { path } of binding.references) {
 				const parent = path.at(-1);
-				if (parent == null) {
-					return non_hoistable;
-				}
+				if (parent == null) return non_hoistable;
+
+				const grandparent = path.at(-2);
 
 				/** @type {import('#compiler').RegularElement | null} */
 				let element = null;
 				/** @type {string | null} */
 				let event_name = null;
 				if (parent.type === 'OnDirective') {
-					element = /** @type {import('#compiler').RegularElement} */ (path.at(-2));
+					element = /** @type {import('#compiler').RegularElement} */ (grandparent);
 					event_name = parent.name;
 				} else if (
 					parent.type === 'ExpressionTag' &&
-					is_event_attribute(/** @type {import('#compiler').Attribute} */ (path.at(-2)))
+					grandparent?.type === 'Attribute' &&
+					is_event_attribute(grandparent)
 				) {
 					element = /** @type {import('#compiler').RegularElement} */ (path.at(-3));
-					const attribute = /** @type {import('#compiler').Attribute} */ (path.at(-2));
+					const attribute = /** @type {import('#compiler').Attribute} */ (grandparent);
 					event_name = get_attribute_event_name(attribute.name);
 				}
 
@@ -164,25 +167,20 @@ function get_delegated_event(event_name, handler, context) {
 	}
 
 	// If we can't find a function, bail-out
-	if (target_function == null) {
-		return non_hoistable;
-	}
+	if (target_function == null) return non_hoistable;
 	// If the function is marked as non-hoistable, bail-out
-	if (target_function.metadata.hoistable === 'impossible') {
-		return non_hoistable;
-	}
+	if (target_function.metadata.hoistable === 'impossible') return non_hoistable;
 	// If the function has more than one arg, then bail-out
-	if (target_function.params.length > 1) {
-		return non_hoistable;
-	}
+	if (target_function.params.length > 1) return non_hoistable;
 
 	const visited_references = new Set();
 	const scope = target_function.metadata.scope;
 	for (const [reference] of scope.references) {
 		// Bail-out if the arguments keyword is used
-		if (reference === 'arguments') {
-			return non_hoistable;
-		}
+		if (reference === 'arguments') return non_hoistable;
+		// Bail-out if references a store subscription
+		if (scope.get(`$${reference}`)?.kind === 'store_sub') return non_hoistable;
+
 		const binding = scope.get(reference);
 		const local_binding = context.state.scope.get(reference);
 
@@ -201,9 +199,7 @@ function get_delegated_event(event_name, handler, context) {
 		}
 
 		// If we reference the index within an each block, then bail-out.
-		if (binding !== null && binding.initial?.type === 'EachBlock') {
-			return non_hoistable;
-		}
+		if (binding !== null && binding.initial?.type === 'EachBlock') return non_hoistable;
 
 		if (
 			binding !== null &&
@@ -388,7 +384,7 @@ export function analyze_component(root, source, options) {
 			? true
 			: (runes ? false : !!options.accessors) ||
 				// because $set method needs accessors
-				!!options.legacy?.componentApi,
+				options.compatibility?.componentApi === 4,
 		reactive_statements: new Map(),
 		binding_groups: new Map(),
 		slot_names: new Map(),
@@ -446,6 +442,7 @@ export function analyze_component(root, source, options) {
 				has_props_rune: false,
 				component_slots: new Set(),
 				expression: null,
+				render_tag: null,
 				private_derived_state: [],
 				function_depth: scope.function_depth
 			};
@@ -517,6 +514,7 @@ export function analyze_component(root, source, options) {
 				reactive_statements: analysis.reactive_statements,
 				component_slots: new Set(),
 				expression: null,
+				render_tag: null,
 				private_derived_state: [],
 				function_depth: scope.function_depth
 			};
@@ -554,7 +552,8 @@ export function analyze_component(root, source, options) {
 	}
 
 	if (analysis.uses_render_tags && (analysis.uses_slots || analysis.slot_names.size > 0)) {
-		e.slot_snippet_conflict(analysis.slot_names.values().next().value);
+		const pos = analysis.slot_names.values().next().value ?? analysis.source.indexOf('$$slot');
+		e.slot_snippet_conflict(pos);
 	}
 
 	if (analysis.css.ast) {
@@ -773,8 +772,7 @@ const legacy_scope_tweaker = {
 			}
 
 			if (
-				binding !== null &&
-				binding.kind === 'normal' &&
+				binding?.kind === 'normal' &&
 				((binding.scope === state.instance_scope && binding.declaration_kind !== 'function') ||
 					binding.declaration_kind === 'import')
 			) {
@@ -799,22 +797,22 @@ const legacy_scope_tweaker = {
 					parent.left === binding.node
 				) {
 					binding.kind = 'derived';
-				} else {
-					let idx = -1;
-					let ancestor = path.at(idx);
-					while (ancestor) {
-						if (ancestor.type === 'EachBlock') {
-							// Ensures that the array is reactive when only its entries are mutated
-							// TODO: this doesn't seem correct. We should be checking at the points where
-							// the identifier (the each expression) is used in a way that makes it reactive.
-							// This just forces the collection identifier to always be reactive even if it's
-							// not.
-							if (ancestor.expression === (idx === -1 ? node : path.at(idx + 1))) {
+				}
+			} else if (binding?.kind === 'each' && binding.mutated) {
+				// Ensure that the array is marked as reactive even when only its entries are mutated
+				let i = path.length;
+				while (i--) {
+					const ancestor = path[i];
+					if (
+						ancestor.type === 'EachBlock' &&
+						state.analysis.template.scopes.get(ancestor)?.declarations.get(node.name) === binding
+					) {
+						for (const binding of ancestor.metadata.references) {
+							if (binding.kind === 'normal') {
 								binding.kind = 'state';
-								break;
 							}
 						}
-						ancestor = path.at(--idx);
+						break;
 					}
 				}
 			}
@@ -967,34 +965,42 @@ const runes_scope_tweaker = {
 		if (rune === '$props') {
 			state.analysis.needs_props = true;
 
-			for (const property of /** @type {import('estree').ObjectPattern} */ (node.id).properties) {
-				if (property.type !== 'Property') continue;
+			if (node.id.type === 'Identifier') {
+				const binding = /** @type {import('#compiler').Binding} */ (state.scope.get(node.id.name));
+				binding.initial = null; // else would be $props()
+				binding.kind = 'rest_prop';
+			} else {
+				equal(node.id.type, 'ObjectPattern');
 
-				const name =
-					property.value.type === 'AssignmentPattern'
-						? /** @type {import('estree').Identifier} */ (property.value.left).name
-						: /** @type {import('estree').Identifier} */ (property.value).name;
-				const alias =
-					property.key.type === 'Identifier'
-						? property.key.name
-						: String(/** @type {import('estree').Literal} */ (property.key).value);
-				let initial = property.value.type === 'AssignmentPattern' ? property.value.right : null;
+				for (const property of node.id.properties) {
+					if (property.type !== 'Property') continue;
 
-				const binding = /** @type {import('#compiler').Binding} */ (state.scope.get(name));
-				binding.prop_alias = alias;
+					const name =
+						property.value.type === 'AssignmentPattern'
+							? /** @type {import('estree').Identifier} */ (property.value.left).name
+							: /** @type {import('estree').Identifier} */ (property.value).name;
+					const alias =
+						property.key.type === 'Identifier'
+							? property.key.name
+							: String(/** @type {import('estree').Literal} */ (property.key).value);
+					let initial = property.value.type === 'AssignmentPattern' ? property.value.right : null;
 
-				// rewire initial from $props() to the actual initial value, stripping $bindable() if necessary
-				if (
-					initial?.type === 'CallExpression' &&
-					initial.callee.type === 'Identifier' &&
-					initial.callee.name === '$bindable'
-				) {
-					binding.initial = /** @type {import('estree').Expression | null} */ (
-						initial.arguments[0] ?? null
-					);
-					binding.kind = 'bindable_prop';
-				} else {
-					binding.initial = initial;
+					const binding = /** @type {import('#compiler').Binding} */ (state.scope.get(name));
+					binding.prop_alias = alias;
+
+					// rewire initial from $props() to the actual initial value, stripping $bindable() if necessary
+					if (
+						initial?.type === 'CallExpression' &&
+						initial.callee.type === 'Identifier' &&
+						initial.callee.name === '$bindable'
+					) {
+						binding.initial = /** @type {import('estree').Expression | null} */ (
+							initial.arguments[0] ?? null
+						);
+						binding.kind = 'bindable_prop';
+					} else {
+						binding.initial = initial;
+					}
 				}
 			}
 		}
@@ -1006,6 +1012,9 @@ const runes_scope_tweaker = {
 			name: node.local.name,
 			alias: node.exported.name
 		});
+
+		const binding = state.scope.get(node.local.name);
+		if (binding) binding.reassigned = true;
 	},
 	ExportNamedDeclaration(node, { next, state }) {
 		if (!node.declaration || state.ast_type !== 'instance') {
@@ -1236,6 +1245,14 @@ const common_visitors = {
 			return;
 		}
 
+		// If we are using arguments outside of a function, then throw an error
+		if (
+			node.name === 'arguments' &&
+			context.path.every((n) => n.type !== 'FunctionDeclaration' && n.type !== 'FunctionExpression')
+		) {
+			e.invalid_arguments_usage(node);
+		}
+
 		const binding = context.state.scope.get(node.name);
 
 		// if no binding, means some global variable
@@ -1274,12 +1291,24 @@ const common_visitors = {
 		}
 	},
 	CallExpression(node, context) {
-		const { expression } = context.state;
+		const { expression, render_tag } = context.state;
 		if (
 			(expression?.type === 'ExpressionTag' || expression?.type === 'SpreadAttribute') &&
 			!is_known_safe_call(node, context)
 		) {
 			expression.metadata.contains_call_expression = true;
+		}
+
+		if (render_tag) {
+			// Find out which of the render tag arguments contains this call expression
+			const arg_idx = unwrap_optional(render_tag.expression).arguments.findIndex(
+				(arg) => arg === node || context.path.includes(arg)
+			);
+
+			// -1 if this is the call expression of the render tag itself
+			if (arg_idx !== -1) {
+				render_tag.metadata.args_with_call_expression.add(arg_idx);
+			}
 		}
 
 		const callee = node.callee;
@@ -1501,6 +1530,16 @@ const common_visitors = {
 				return;
 			}
 		}
+	},
+	Component(node, context) {
+		const binding = context.state.scope.get(
+			node.name.includes('.') ? node.name.slice(0, node.name.indexOf('.')) : node.name
+		);
+
+		node.metadata.dynamic = binding !== null && binding.kind !== 'normal';
+	},
+	RenderTag(node, context) {
+		context.next({ ...context.state, render_tag: node });
 	}
 };
 

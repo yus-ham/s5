@@ -3,19 +3,18 @@ import {
 	current_component_context,
 	current_effect,
 	current_reaction,
-	current_untracking,
 	destroy_effect_children,
 	dev_current_component_function,
-	execute_effect,
+	update_effect,
 	get,
 	is_destroying_effect,
 	is_flushing_effect,
 	remove_reactions,
 	schedule_effect,
+	set_current_reaction,
 	set_is_destroying_effect,
 	set_is_flushing_effect,
 	set_signal_status,
-	set_untracking,
 	untrack
 } from '../runtime.js';
 import {
@@ -31,13 +30,14 @@ import {
 	EFFECT_TRANSPARENT,
 	DERIVED,
 	UNOWNED,
-	CLEAN
+	CLEAN,
+	INSPECT_EFFECT,
+	HEAD_EFFECT
 } from '../constants.js';
 import { set } from './sources.js';
-import { remove } from '../dom/reconciler.js';
 import * as e from '../errors.js';
 import { DEV } from 'esm-env';
-import { define_property } from '../utils.js';
+import { define_property } from '../../shared/utils.js';
 
 /**
  * @param {'$effect' | '$effect.pre' | '$inspect'} rune
@@ -45,6 +45,10 @@ import { define_property } from '../utils.js';
 export function validate_effect(rune) {
 	if (current_effect === null && current_reaction === null) {
 		e.effect_orphan(rune);
+	}
+
+	if (current_reaction !== null && (current_reaction.f & UNOWNED) !== 0) {
+		e.effect_in_unowned_derived();
 	}
 
 	if (is_destroying_effect) {
@@ -71,16 +75,17 @@ export function push_effect(effect, parent_effect) {
  * @param {number} type
  * @param {null | (() => void | (() => void))} fn
  * @param {boolean} sync
+ * @param {boolean} push
  * @returns {import('#client').Effect}
  */
-function create_effect(type, fn, sync) {
+function create_effect(type, fn, sync, push = true) {
 	var is_root = (type & ROOT_EFFECT) !== 0;
 
 	/** @type {import('#client').Effect} */
 	var effect = {
 		ctx: current_component_context,
 		deps: null,
-		dom: null,
+		nodes: null,
 		f: type | DIRTY,
 		first: null,
 		fn,
@@ -89,7 +94,8 @@ function create_effect(type, fn, sync) {
 		parent: is_root ? null : current_effect,
 		prev: null,
 		teardown: null,
-		transitions: null
+		transitions: null,
+		version: 0
 	};
 
 	if (DEV) {
@@ -101,8 +107,11 @@ function create_effect(type, fn, sync) {
 
 		try {
 			set_is_flushing_effect(true);
-			execute_effect(effect);
+			update_effect(effect);
 			effect.f |= EFFECT_RAN;
+		} catch (e) {
+			destroy_effect(effect);
+			throw e;
 		} finally {
 			set_is_flushing_effect(previously_flushing_effect);
 		}
@@ -116,42 +125,33 @@ function create_effect(type, fn, sync) {
 		sync &&
 		effect.deps === null &&
 		effect.first === null &&
-		effect.dom === null &&
+		effect.nodes === null &&
 		effect.teardown === null;
 
-	if (!inert && current_reaction !== null && !is_root) {
-		var flags = current_reaction.f;
-		if ((flags & DERIVED) !== 0) {
-			if ((flags & UNOWNED) !== 0) {
-				e.effect_in_unowned_derived();
-			}
-			// If we are inside a derived, then we also need to attach the
-			// effect to the parent effect too.
-			if (current_effect !== null) {
-				push_effect(effect, current_effect);
-			}
+	if (!inert && !is_root && push) {
+		if (current_effect !== null) {
+			push_effect(effect, current_effect);
 		}
 
-		push_effect(effect, current_reaction);
+		// if we're in a derived, add the effect there too
+		if (current_reaction !== null && (current_reaction.f & DERIVED) !== 0) {
+			push_effect(effect, current_reaction);
+		}
 	}
 
 	return effect;
 }
 
 /**
- * Internal representation of `$effect.active()`
+ * Internal representation of `$effect.tracking()`
  * @returns {boolean}
  */
-export function effect_active() {
-	if (current_reaction && (current_reaction.f & DERIVED) !== 0) {
-		return (current_reaction.f & UNOWNED) === 0;
+export function effect_tracking() {
+	if (current_reaction === null) {
+		return false;
 	}
 
-	if (current_effect) {
-		return (current_effect.f & (BRANCH_EFFECT | ROOT_EFFECT)) === 0;
-	}
-
-	return false;
+	return (current_reaction.f & UNOWNED) === 0;
 }
 
 /**
@@ -210,6 +210,11 @@ export function user_pre_effect(fn) {
 	return render_effect(fn);
 }
 
+/** @param {() => void | (() => void)} fn */
+export function inspect_effect(fn) {
+	return create_effect(INSPECT_EFFECT, fn, true);
+}
+
 /**
  * Internal representation of `$effect.root(...)`
  * @param {() => void | (() => void)} fn
@@ -266,7 +271,7 @@ export function legacy_pre_effect_reset() {
 			var effect = token.effect;
 
 			if (check_dirtiness(effect)) {
-				execute_effect(effect);
+				update_effect(effect);
 			}
 
 			token.ran = false;
@@ -305,9 +310,12 @@ export function block(fn, flags = 0) {
 	return create_effect(RENDER_EFFECT | BLOCK_EFFECT | flags, fn, true);
 }
 
-/** @param {(() => void)} fn */
-export function branch(fn) {
-	return create_effect(RENDER_EFFECT | BRANCH_EFFECT, fn, true);
+/**
+ * @param {(() => void)} fn
+ * @param {boolean} [push]
+ */
+export function branch(fn, push = true) {
+	return create_effect(RENDER_EFFECT | BRANCH_EFFECT, fn, true, push);
 }
 
 /**
@@ -317,14 +325,14 @@ export function execute_effect_teardown(effect) {
 	var teardown = effect.teardown;
 	if (teardown !== null) {
 		const previously_destroying_effect = is_destroying_effect;
-		const previous_untracking = current_untracking;
+		const previous_reaction = current_reaction;
 		set_is_destroying_effect(true);
-		set_untracking(true);
+		set_current_reaction(null);
 		try {
 			teardown.call(null);
 		} finally {
 			set_is_destroying_effect(previously_destroying_effect);
-			set_untracking(previous_untracking);
+			set_current_reaction(previous_reaction);
 		}
 	}
 }
@@ -335,13 +343,26 @@ export function execute_effect_teardown(effect) {
  * @returns {void}
  */
 export function destroy_effect(effect, remove_dom = true) {
-	var dom = effect.dom;
+	var removed = false;
 
-	if (dom !== null && remove_dom) {
-		remove(dom);
+	if ((remove_dom || (effect.f & HEAD_EFFECT) !== 0) && effect.nodes !== null) {
+		/** @type {import('#client').TemplateNode | null} */
+		var node = effect.nodes.start;
+		var end = effect.nodes.end;
+
+		while (node !== null) {
+			/** @type {import('#client').TemplateNode | null} */
+			var next =
+				node === end ? null : /** @type {import('#client').TemplateNode} */ (node.nextSibling);
+
+			node.remove();
+			node = next;
+		}
+
+		removed = true;
 	}
 
-	destroy_effect_children(effect, remove_dom);
+	destroy_effect_children(effect, remove_dom && !removed);
 	remove_reactions(effect, 0);
 	set_signal_status(effect, DESTROYED);
 
@@ -365,10 +386,10 @@ export function destroy_effect(effect, remove_dom = true) {
 		effect.prev =
 		effect.teardown =
 		effect.ctx =
-		effect.dom =
 		effect.deps =
 		effect.parent =
 		effect.fn =
+		effect.nodes =
 			null;
 }
 
@@ -478,7 +499,7 @@ function resume_children(effect, local) {
 	// If a dependency of this effect changed while it was paused,
 	// apply the change now
 	if (check_dirtiness(effect)) {
-		execute_effect(effect);
+		update_effect(effect);
 	}
 
 	var child = effect.first;

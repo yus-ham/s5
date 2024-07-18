@@ -1,8 +1,13 @@
 import { teardown } from '../../reactivity/effects.js';
-import { all_registered_events, root_event_handles } from '../../render.js';
-import { define_property, is_array } from '../../utils.js';
+import { define_property, is_array } from '../../../shared/utils.js';
 import { hydrating } from '../hydration.js';
 import { queue_micro_task } from '../task.js';
+
+/** @type {Set<string>} */
+export const all_registered_events = new Set();
+
+/** @type {Set<(events: Array<string>) => void>} */
+export const root_event_handles = new Set();
 
 /**
  * SSR adds onload and onerror attributes to catch those events before the hydration.
@@ -33,7 +38,7 @@ export function replay_events(dom) {
 
 /**
  * @param {string} event_name
- * @param {Element} dom
+ * @param {EventTarget} dom
  * @param {EventListener} handler
  * @param {AddEventListenerOptions} options
  */
@@ -44,7 +49,7 @@ export function create_event(event_name, dom, handler, options) {
 	function target_handler(/** @type {Event} */ event) {
 		if (!options.capture) {
 			// Only call in the bubble phase, else delegated events would be called before the capturing events
-			handle_event_propagation(dom, event);
+			handle_event_propagation.call(dom, event);
 		}
 		if (!event.cancelBubble) {
 			return handler.call(this, event);
@@ -71,7 +76,31 @@ export function create_event(event_name, dom, handler, options) {
  * rather than `addEventListener` will preserve the correct order relative to handlers added declaratively
  * (with attributes like `onclick`), which use event delegation for performance reasons
  *
+ * @template {HTMLElement} Element
+ * @template {keyof HTMLElementEventMap} Type
+ * @overload
  * @param {Element} element
+ * @param {Type} type
+ * @param {(this: Element, event: HTMLElementEventMap[Type]) => any} handler
+ * @param {AddEventListenerOptions} [options]
+ * @returns {() => void}
+ */
+
+/**
+ * Attaches an event handler to an element and returns a function that removes the handler. Using this
+ * rather than `addEventListener` will preserve the correct order relative to handlers added declaratively
+ * (with attributes like `onclick`), which use event delegation for performance reasons
+ *
+ * @overload
+ * @param {EventTarget} element
+ * @param {string} type
+ * @param {EventListener} handler
+ * @param {AddEventListenerOptions} [options]
+ * @returns {() => void}
+ */
+
+/**
+ * @param {EventTarget} element
  * @param {string} type
  * @param {EventListener} handler
  * @param {AddEventListenerOptions} [options]
@@ -119,12 +148,13 @@ export function delegate(events) {
 }
 
 /**
- * @param {Node} handler_element
+ * @this {EventTarget}
  * @param {Event} event
  * @returns {void}
  */
-export function handle_event_propagation(handler_element, event) {
-	var owner_document = handler_element.ownerDocument;
+export function handle_event_propagation(event) {
+	var handler_element = this;
+	var owner_document = /** @type {Node} */ (handler_element).ownerDocument;
 	var event_name = event.type;
 	var path = event.composedPath?.() || [];
 	var current_target = /** @type {null | Element} */ (path[0] || event.target);
@@ -165,13 +195,15 @@ export function handle_event_propagation(handler_element, event) {
 		}
 
 		if (at_idx <= handler_idx) {
-			// +1 because at_idx is the element which was already handled, and there can only be one delegated event per element.
-			// Avoids on:click and onclick on the same event resulting in onclick being fired twice.
-			path_idx = at_idx + 1;
+			path_idx = at_idx;
 		}
 	}
 
 	current_target = /** @type {Element} */ (path[path_idx] || event.target);
+	// there can only be one delegated event per element, and we either already handled the current target,
+	// or this is the very first target in the chain which has a non-delegated listener, in which case it's safe
+	// to handle a possible delegated event on it later (through the root delegation listener for example).
+	if (current_target === handler_element) return;
 
 	// Proxy currentTarget to correct target
 	define_property(event, 'currentTarget', {
@@ -190,6 +222,7 @@ export function handle_event_propagation(handler_element, event) {
 		 * @type {unknown[]}
 		 */
 		var other_errors = [];
+
 		while (current_target !== null) {
 			/** @type {null | Element} */
 			var parent_element =
@@ -214,12 +247,7 @@ export function handle_event_propagation(handler_element, event) {
 					throw_error = error;
 				}
 			}
-			if (
-				event.cancelBubble ||
-				parent_element === handler_element ||
-				parent_element === null ||
-				current_target === handler_element
-			) {
+			if (event.cancelBubble || parent_element === handler_element || parent_element === null) {
 				break;
 			}
 			current_target = parent_element;

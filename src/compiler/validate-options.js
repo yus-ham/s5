@@ -1,3 +1,4 @@
+/** @import { ModuleCompileOptions, ValidatedModuleCompileOptions, CompileOptions, ValidatedCompileOptions } from '#compiler' */
 import * as e from './errors.js';
 import * as w from './warnings.js';
 
@@ -34,14 +35,14 @@ const common = {
 };
 
 export const validate_module_options =
-	/** @type {Validator<import('#compiler').ModuleCompileOptions, import('#compiler').ValidatedModuleCompileOptions>} */ (
+	/** @type {Validator<ModuleCompileOptions, ValidatedModuleCompileOptions>} */ (
 		object({
 			...common
 		})
 	);
 
 export const validate_component_options =
-	/** @type {Validator<import('#compiler').CompileOptions, import('#compiler').ValidatedCompileOptions>} */ (
+	/** @type {Validator<CompileOptions, ValidatedCompileOptions>} */ (
 		object({
 			...common,
 
@@ -79,8 +80,12 @@ export const validate_component_options =
 
 			immutable: deprecate(w.options_deprecated_immutable, boolean(false)),
 
-			legacy: object({
-				componentApi: boolean(false)
+			legacy: removed(
+				'The legacy option has been removed. If you are using this because of legacy.componentApi, use compatibility.componentApi instead'
+			),
+
+			compatibility: object({
+				componentApi: list([4, 5], 5)
 			}),
 
 			loopGuardTimeout: warn_removed(w.options_removed_loop_guard_timeout),
@@ -100,6 +105,8 @@ export const validate_component_options =
 			runes: boolean(undefined),
 
 			hmr: boolean(false),
+
+			warningFilter: fun(() => true),
 
 			sourcemap: validator(undefined, (input) => {
 				// Source maps can take on a variety of values, including string, JSON, map objects from magic-string and source-map,
@@ -250,6 +257,20 @@ function string(fallback, allow_empty = true) {
 
 		if (!allow_empty && input === '') {
 			throw_error(`${keypath} cannot be empty`);
+		}
+
+		return input;
+	});
+}
+
+/**
+ * @param {string[]} fallback
+ * @returns {Validator}
+ */
+function string_array(fallback) {
+	return validator(fallback, (input, keypath) => {
+		if (input && !Array.isArray(input)) {
+			throw_error(`${keypath} should be a string array, if specified`);
 		}
 
 		return input;

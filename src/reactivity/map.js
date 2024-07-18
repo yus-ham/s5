@@ -8,7 +8,7 @@ import { increment } from './utils.js';
  * @template V
  * @extends {Map<K, V>}
  */
-export class ReactiveMap extends Map {
+export class SvelteMap extends Map {
 	/** @type {Map<K, import('#client').Source<number>>} */
 	#sources = new Map();
 	#version = source(0);
@@ -122,17 +122,18 @@ export class ReactiveMap extends Map {
 	}
 
 	clear() {
-		var sources = this.#sources;
-
-		if (super.size !== 0) {
-			set(this.#size, 0);
-			for (var s of sources.values()) {
-				set(s, -1);
-			}
-			increment(this.#version);
-			sources.clear();
+		if (super.size === 0) {
+			return;
 		}
+		// Clear first, so we get nice console.log outputs with $inspect
 		super.clear();
+		var sources = this.#sources;
+		set(this.#size, 0);
+		for (var s of sources.values()) {
+			set(s, -1);
+		}
+		increment(this.#version);
+		sources.clear();
 	}
 
 	#read_all() {
