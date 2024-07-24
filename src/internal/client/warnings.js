@@ -6,6 +6,20 @@ var bold = 'font-weight: bold';
 var normal = 'font-weight: normal';
 
 /**
+ * `%binding%` (%location%) is binding to a non-reactive property
+ * @param {string} binding
+ * @param {string | undefined | null} [location]
+ */
+export function binding_property_non_reactive(binding, location) {
+	if (DEV) {
+		console.warn(`%c[svelte] binding_property_non_reactive\n%c${location ? `\`${binding}\` (${location}) is binding to a non-reactive property` : `\`${binding}\` is binding to a non-reactive property`}`, bold, normal);
+	} else {
+		// TODO print a link to the documentation
+		console.warn("binding_property_non_reactive");
+	}
+}
+
+/**
  * The `%attribute%` attribute on `%html%` changed its value between server and client renders. The client value, `%value%`, will be ignored in favour of the server value
  * @param {string} attribute
  * @param {string} html
@@ -43,6 +57,18 @@ export function hydration_mismatch(location) {
 	} else {
 		// TODO print a link to the documentation
 		console.warn("hydration_mismatch");
+	}
+}
+
+/**
+ * The `render` function passed to `createRawSnippet` should return HTML for a single element
+ */
+export function invalid_raw_snippet_render() {
+	if (DEV) {
+		console.warn(`%c[svelte] invalid_raw_snippet_render\n%cThe \`render\` function passed to \`createRawSnippet\` should return HTML for a single element`, bold, normal);
+	} else {
+		// TODO print a link to the documentation
+		console.warn("invalid_raw_snippet_render");
 	}
 }
 

@@ -334,7 +334,8 @@ export default function element(parser) {
 			content.content.comment = prev_comment;
 
 			if (current.css) e.style_duplicate(start);
-			current.css = content;
+			if (parser.plugin.append(content))
+				current.css = content;
 		}
 		return;
 	}

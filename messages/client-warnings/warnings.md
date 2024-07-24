@@ -1,3 +1,9 @@
+## binding_property_non_reactive
+
+> `%binding%` is binding to a non-reactive property
+
+> `%binding%` (%location%) is binding to a non-reactive property
+
 ## hydration_attribute_changed
 
 > The `%attribute%` attribute on `%html%` changed its value between server and client renders. The client value, `%value%`, will be ignored in favour of the server value
@@ -13,6 +19,10 @@
 > Hydration failed because the initial UI does not match what was rendered on the server
 
 > Hydration failed because the initial UI does not match what was rendered on the server. The error occurred near %location%
+
+## invalid_raw_snippet_render
+
+> The `render` function passed to `createRawSnippet` should return HTML for a single element
 
 ## lifecycle_double_unmount
 

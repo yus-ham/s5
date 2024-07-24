@@ -336,7 +336,8 @@ export function serialize_set_binding(node, context, fallback, prefix, options) 
 						left,
 						context.state.analysis.runes &&
 							!options?.skip_proxy_and_freeze &&
-							should_proxy_or_freeze(value, context.state.scope)
+							should_proxy_or_freeze(value, context.state.scope) &&
+							binding.kind === 'bindable_prop'
 							? serialize_proxy_reassignment(value, left_name, state)
 							: value
 					);
@@ -543,7 +544,10 @@ function get_hoistable_params(node, context) {
 				!is_prop_source(binding, context.state)
 			) {
 				push_unique(b.id('$$props'));
-			} else {
+			} else if (
+				// imports don't need to be hoisted
+				binding.declaration_kind !== 'import'
+			) {
 				// create a copy to remove start/end tags which would mess up source maps
 				push_unique(b.id(binding.node.name));
 				// rest props are often accessed through the $$props object for optimization reasons,

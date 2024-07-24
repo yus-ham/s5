@@ -3,6 +3,7 @@ import { set_scope, get_rune } from '../../scope.js';
 import {
 	extract_identifiers,
 	extract_paths,
+	get_attribute_chunks,
 	is_event_attribute,
 	is_expression_async,
 	is_text_attribute,
@@ -678,7 +679,7 @@ const javascript_visitors_runes = {
 
 /**
  *
- * @param {true | Array<import('#compiler').Text | import('#compiler').ExpressionTag>} value
+ * @param {import('#compiler').Attribute['value']} value
  * @param {import('./types').ComponentContext} context
  * @param {boolean} trim_whitespace
  * @param {boolean} is_component
@@ -689,8 +690,8 @@ function serialize_attribute_value(value, context, trim_whitespace = false, is_c
 		return b.true;
 	}
 
-	if (value.length === 1) {
-		const chunk = value[0];
+	if (!Array.isArray(value) || value.length === 1) {
+		const chunk = Array.isArray(value) ? value[0] : value;
 
 		if (chunk.type === 'Text') {
 			const data = trim_whitespace
@@ -962,25 +963,22 @@ function serialize_inline_component(node, expression, context) {
 			])
 		);
 
-		if (
-			slot_name === 'default' &&
-			!has_children_prop &&
-			lets.length === 0 &&
-			children.default.every((node) => node.type !== 'SvelteFragment')
-		) {
-			push_prop(
-				b.prop(
-					'init',
-					b.id('children'),
-					context.state.options.dev ? b.call('$.add_snippet_symbol', slot_fn) : slot_fn
-				)
-			);
-			// We additionally add the default slot as a boolean, so that the slot render function on the other
-			// side knows it should get the content to render from $$props.children
-			serialized_slots.push(b.init('default', b.true));
+		if (slot_name === 'default' && !has_children_prop) {
+			if (lets.length === 0 && children.default.every((node) => node.type !== 'SvelteFragment')) {
+				// create `children` prop...
+				push_prop(b.prop('init', b.id('children'), slot_fn));
+
+				// and `$$slots.default: true` so that `<slot>` on the child works
+				serialized_slots.push(b.init(slot_name, b.true));
+			} else {
+				// create `$$slots.default`...
+				serialized_slots.push(b.init(slot_name, slot_fn));
+
+				// and a `children` prop that errors
+				push_prop(b.init('children', b.id('$.invalid_default_snippet')));
+			}
 		} else {
-			const slot = b.prop('init', b.literal(slot_name), slot_fn);
-			serialized_slots.push(slot);
+			serialized_slots.push(b.init(slot_name, slot_fn));
 		}
 	}
 
@@ -1000,7 +998,7 @@ function serialize_inline_component(node, expression, context) {
 	/** @type {import('estree').Statement} */
 	let statement = b.stmt(
 		(node.type === 'SvelteComponent' ? b.maybe_call : b.call)(
-			context.state.options.dev ? b.call('$.validate_component', expression) : expression,
+			expression,
 			b.id('$$payload'),
 			props_expression
 		)
@@ -1208,16 +1206,7 @@ const template_visitors = {
 		const callee = unwrap_optional(node.expression).callee;
 		const raw_args = unwrap_optional(node.expression).arguments;
 
-		const expression = /** @type {import('estree').Expression} */ (context.visit(callee));
-		const snippet_function = context.state.options.dev
-			? b.call(
-					'$.validate_snippet',
-					expression,
-					raw_args.length && callee.type === 'Identifier' && callee.name === 'children'
-						? b.id('$$props')
-						: undefined
-				)
-			: expression;
+		const snippet_function = /** @type {import('estree').Expression} */ (context.visit(callee));
 
 		const snippet_args = raw_args.map((arg) => {
 			return /** @type {import('estree').Expression} */ (context.visit(arg));
@@ -1500,10 +1489,6 @@ const template_visitors = {
 		fn.___snippet = true;
 		// TODO hoist where possible
 		context.state.init.push(fn);
-
-		if (context.state.options.dev) {
-			context.state.init.push(b.stmt(b.call('$.add_snippet_symbol', node.expression)));
-		}
 	},
 	Component(node, context) {
 		serialize_inline_component(node, b.id(node.name), context);
@@ -1667,6 +1652,7 @@ function serialize_element_attributes(node, context) {
 				if (node.name === 'textarea') {
 					if (
 						attribute.value !== true &&
+						Array.isArray(attribute.value) &&
 						attribute.value[0].type === 'Text' &&
 						regex_starts_with_newline.test(attribute.value[0].data)
 					) {
@@ -1891,15 +1877,19 @@ function serialize_class_directives(class_directives, class_attribute) {
 	const expressions = class_directives.map((directive) =>
 		b.conditional(directive.expression, b.literal(directive.name), b.literal(''))
 	);
+
 	if (class_attribute === null) {
 		class_attribute = create_attribute('class', -1, -1, []);
 	}
-	const last = /** @type {any[]} */ (class_attribute.value).at(-1);
+
+	const chunks = get_attribute_chunks(class_attribute.value);
+	const last = chunks.at(-1);
+
 	if (last?.type === 'Text') {
 		last.data += ' ';
 		last.raw += ' ';
 	} else if (last) {
-		/** @type {import('#compiler').Text[]} */ (class_attribute.value).push({
+		chunks.push({
 			type: 'Text',
 			start: -1,
 			end: -1,
@@ -1908,7 +1898,8 @@ function serialize_class_directives(class_directives, class_attribute) {
 			raw: ' '
 		});
 	}
-	/** @type {import('#compiler').ExpressionTag[]} */ (class_attribute.value).push({
+
+	chunks.push({
 		type: 'ExpressionTag',
 		start: -1,
 		end: -1,
@@ -1922,6 +1913,8 @@ function serialize_class_directives(class_directives, class_attribute) {
 		),
 		metadata: { contains_call_expression: false, dynamic: false }
 	});
+
+	class_attribute.value = chunks;
 	return class_attribute;
 }
 

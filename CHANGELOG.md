@@ -1,5 +1,81 @@
 # svelte
 
+## 5.0.0-next.196
+
+### Patch Changes
+
+- fix: ensure dynamic event handlers are wrapped in a derived ([#12563](https://github.com/sveltejs/svelte/pull/12563))
+
+- chore: tidy up dynamic event handler generated code ([#12553](https://github.com/sveltejs/svelte/pull/12553))
+
+- fix: dynamic event delegation for stateful call expressions ([#12549](https://github.com/sveltejs/svelte/pull/12549))
+
+- fix: ensure $state.snapshot correctly clones Date objects ([#12564](https://github.com/sveltejs/svelte/pull/12564))
+
+- fix: remove runtime validation of components/snippets, rely on types instead ([#12507](https://github.com/sveltejs/svelte/pull/12507))
+
+- fix: properly update store values ([#12562](https://github.com/sveltejs/svelte/pull/12562))
+
+## 5.0.0-next.195
+
+### Patch Changes
+
+- fix: update original source in HMR update ([#12547](https://github.com/sveltejs/svelte/pull/12547))
+
+## 5.0.0-next.194
+
+### Patch Changes
+
+- fix: bail-out of hydrating head if no anchor is found ([#12541](https://github.com/sveltejs/svelte/pull/12541))
+
+- chore: add warning for invalid render function of createRawSnippet ([#12535](https://github.com/sveltejs/svelte/pull/12535))
+
+- fix: correctly set filename on HMR wrappers ([#12543](https://github.com/sveltejs/svelte/pull/12543))
+
+- fix: only emit binding_property_non_reactive warning in runes mode ([#12544](https://github.com/sveltejs/svelte/pull/12544))
+
+## 5.0.0-next.193
+
+### Patch Changes
+
+- fix: improve validation error that occurs when using `{@render ...}` to render default slotted content ([#12521](https://github.com/sveltejs/svelte/pull/12521))
+
+- fix: reset hydrate node after `hydrate(...)` ([#12512](https://github.com/sveltejs/svelte/pull/12512))
+
+## 5.0.0-next.192
+
+### Patch Changes
+
+- fix: make animations more robust to quick shuffling ([#12496](https://github.com/sveltejs/svelte/pull/12496))
+
+- feat: warn if binding to a non-reactive property ([#12500](https://github.com/sveltejs/svelte/pull/12500))
+
+- fix: ensure $state proxy invokes set accessor if present ([#12503](https://github.com/sveltejs/svelte/pull/12503))
+
+## 5.0.0-next.191
+
+### Patch Changes
+
+- fix: properly assign trailing comments ([#12471](https://github.com/sveltejs/svelte/pull/12471))
+
+- breaking: remove deep reactivity from non-bindable props ([#12484](https://github.com/sveltejs/svelte/pull/12484))
+
+- fix: ensure async initial store value is noticed ([#12486](https://github.com/sveltejs/svelte/pull/12486))
+
+- fix: don't add imports to hoisted event parameters ([#12493](https://github.com/sveltejs/svelte/pull/12493))
+
+- fix: set `volume` through DOM property rather than attribute ([#12485](https://github.com/sveltejs/svelte/pull/12485))
+
+## 5.0.0-next.190
+
+### Patch Changes
+
+- fix: hydrate multiple `<svelte:head>` elements correctly ([#12475](https://github.com/sveltejs/svelte/pull/12475))
+
+- fix: assign correct scope to attributes of named slot ([#12476](https://github.com/sveltejs/svelte/pull/12476))
+
+- breaking: warn on quoted single-expression attributes in runes mode ([#12479](https://github.com/sveltejs/svelte/pull/12479))
+
 ## 5.0.0-next.189
 
 ### Patch Changes

@@ -101,6 +101,15 @@ declare module 'svelte' {
 		$set(props: Partial<Props>): void;
 	}
 
+	const brand: unique symbol;
+	type Brand<B> = { [brand]: B };
+	type Branded<T, B> = T & Brand<B>;
+
+	/**
+	 * Internal implementation details that vary between environments
+	 */
+	export type ComponentInternals = Branded<{}, 'ComponentInternals'>;
+
 	/**
 	 * Can be used to create strongly typed Svelte components.
 	 *
@@ -133,7 +142,8 @@ declare module 'svelte' {
 		 * @param props The props passed to the component.
 		 */
 		(
-			internal: unknown,
+			this: void,
+			internals: ComponentInternals,
 			props: Props
 		): {
 			/**
@@ -293,6 +303,9 @@ declare module 'svelte' {
 					: [type: Type, parameter: EventMap[Type], options?: DispatchOptions]
 		): boolean;
 	}
+	type Getters<T> = {
+		[K in keyof T]: () => T[K];
+	};
 	/**
 	 * The `onMount` function schedules a callback to run as soon as the component has been mounted to the DOM.
 	 * It must be called during the component's initialisation (but doesn't need to live *inside* the component;
@@ -457,9 +470,6 @@ declare module 'svelte' {
 	 * https://svelte.dev/docs/svelte#getallcontexts
 	 * */
 	export function getAllContexts<T extends Map<any, any> = Map<any, any>>(): T;
-	type Getters<T> = {
-		[K in keyof T]: () => T[K];
-	};
 
 	export {};
 }
@@ -1153,6 +1163,16 @@ declare module 'svelte/compiler' {
 		outro: boolean;
 	}
 
+	/** A `style:` directive */
+	interface LegacyStyleDirective extends BaseNode_1 {
+		type: 'StyleDirective';
+		/** The 'x' in `style:x` */
+		name: string;
+		/** The 'y' in `style:x={y}` */
+		value: true | Array<ExpressionTag | Text>;
+		modifiers: Array<'important'>;
+	}
+
 	interface LegacyWindow extends BaseElement_1 {
 		type: 'Window';
 	}
@@ -1171,7 +1191,7 @@ declare module 'svelte/compiler' {
 		| LegacyClass
 		| LegacyLet
 		| LegacyEventHandler
-		| StyleDirective
+		| LegacyStyleDirective
 		| LegacyTransition
 		| LegacyAction;
 
@@ -1634,7 +1654,7 @@ declare module 'svelte/compiler' {
 		/** The 'x' in `style:x` */
 		name: string;
 		/** The 'y' in `style:x={y}` */
-		value: true | Array<ExpressionTag | Text>;
+		value: true | ExpressionTag | Array<ExpressionTag | Text>;
 		modifiers: Array<'important'>;
 		metadata: {
 			dynamic: boolean;
@@ -1855,7 +1875,7 @@ declare module 'svelte/compiler' {
 	interface Attribute extends BaseNode {
 		type: 'Attribute';
 		name: string;
-		value: true | Array<Text | ExpressionTag>;
+		value: true | ExpressionTag | Array<Text | ExpressionTag>;
 		metadata: {
 			dynamic: boolean;
 			/** May be set if this is an event attribute */
