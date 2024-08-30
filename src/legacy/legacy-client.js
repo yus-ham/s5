@@ -2,7 +2,7 @@
 import { mutable_source, set } from '../internal/client/reactivity/sources.js';
 import { user_pre_effect } from '../internal/client/reactivity/effects.js';
 import { hydrate, mount, unmount } from '../internal/client/render.js';
-import { get } from '../internal/client/runtime.js';
+import { flush_sync, get } from '../internal/client/runtime.js';
 import { define_property } from '../internal/shared/utils.js';
 
 /**
@@ -17,9 +17,6 @@ import { define_property } from '../internal/shared/utils.js';
  *
  * @param {ComponentConstructorOptions<Props> & {
  * 	component: ComponentType<SvelteComponent<Props, Events, Slots>> | Component<Props>;
- * 	immutable?: boolean;
- * 	hydrate?: boolean;
- * 	recover?: boolean;
  * }} options
  * @returns {SvelteComponent<Props, Events, Slots> & Exports}
  */
@@ -64,9 +61,6 @@ class Svelte4Component {
 	/**
 	 * @param {ComponentConstructorOptions & {
 	 *  component: any;
-	 * 	immutable?: boolean;
-	 * 	hydrate?: boolean;
-	 * 	recover?: false;
 	 * }} options
 	 */
 	constructor(options) {
@@ -109,6 +103,11 @@ class Svelte4Component {
 			intro: options.intro ?? false,
 			recover: options.recover
 		});
+
+		// We don't flush_sync for custom element wrappers or if the user doesn't want it
+		if (!options?.props?.$$host || options.sync === false) {
+			flush_sync();
+		}
 
 		this.#events = props.$$events;
 

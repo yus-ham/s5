@@ -1,6 +1,9 @@
+/** @import { ClassDeclaration, Expression, FunctionDeclaration, Identifier, ImportDeclaration, MemberExpression, Node, Pattern, VariableDeclarator } from 'estree' */
+/** @import { Context, Visitor } from 'zimmerframe' */
+/** @import { AnimateDirective, Binding, Component, DeclarationKind, EachBlock, ElementLike, LetDirective, SvelteComponent, SvelteNode, SvelteSelf, TransitionDirective, UseDirective } from '#compiler' */
 import is_reference from 'is-reference';
 import { walk } from 'zimmerframe';
-import { is_element_node } from './nodes.js';
+import { create_expression_metadata } from './nodes.js';
 import * as b from '../utils/builders.js';
 import * as e from '../errors.js';
 import {
@@ -9,7 +12,8 @@ import {
 	object,
 	unwrap_pattern
 } from '../utils/ast.js';
-import { JsKeywords, Runes } from './constants.js';
+import { is_reserved, is_rune } from '../../utils.js';
+import { determine_slot } from '../utils/slot.js';
 
 export class Scope {
 	/** @type {ScopeRoot} */
@@ -30,20 +34,20 @@ export class Scope {
 	/**
 	 * A map of every identifier declared by this scope, and all the
 	 * identifiers that reference it
-	 * @type {Map<string, import('#compiler').Binding>}
+	 * @type {Map<string, Binding>}
 	 */
 	declarations = new Map();
 
 	/**
 	 * A map of declarators to the bindings they declare
-	 * @type {Map<import('estree').VariableDeclarator | import('#compiler').LetDirective, import('#compiler').Binding[]>}
+	 * @type {Map<VariableDeclarator | LetDirective, Binding[]>}
 	 */
 	declarators = new Map();
 
 	/**
 	 * A set of all the names referenced with this scope
 	 * — useful for generating unique names
-	 * @type {Map<string, { node: import('estree').Identifier; path: import('#compiler').SvelteNode[] }[]>}
+	 * @type {Map<string, { node: Identifier; path: SvelteNode[] }[]>}
 	 */
 	references = new Map();
 
@@ -67,11 +71,11 @@ export class Scope {
 	}
 
 	/**
-	 * @param {import('estree').Identifier} node
-	 * @param {import('#compiler').Binding['kind']} kind
-	 * @param {import('#compiler').DeclarationKind} declaration_kind
-	 * @param {null | import('estree').Expression | import('estree').FunctionDeclaration | import('estree').ClassDeclaration | import('estree').ImportDeclaration | import('../types/template.js').EachBlock} initial
-	 * @returns {import('#compiler').Binding}
+	 * @param {Identifier} node
+	 * @param {Binding['kind']} kind
+	 * @param {DeclarationKind} declaration_kind
+	 * @param {null | Expression | FunctionDeclaration | ClassDeclaration | ImportDeclaration | EachBlock} initial
+	 * @returns {Binding}
 	 */
 	declare(node, kind, declaration_kind, initial = null) {
 		if (node.name === '$') {
@@ -103,21 +107,20 @@ export class Scope {
 			e.declaration_duplicate(node, node.name);
 		}
 
-		/** @type {import('#compiler').Binding} */
+		/** @type {Binding} */
 		const binding = {
 			node,
 			references: [],
 			legacy_dependencies: [],
 			initial,
+			reassigned: false,
 			mutated: false,
+			updated: false,
 			scope: this,
 			kind,
 			declaration_kind,
 			is_called: false,
 			prop_alias: null,
-			expression: null,
-			mutation: null,
-			reassigned: false,
 			metadata: null
 		};
 		this.declarations.set(node.name, binding);
@@ -146,7 +149,7 @@ export class Scope {
 			this.references.has(name) ||
 			this.declarations.has(name) ||
 			this.root.conflicts.has(name) ||
-			JsKeywords.includes(name)
+			is_reserved(name)
 		) {
 			name = `${preferred_name}_${n++}`;
 		}
@@ -158,15 +161,15 @@ export class Scope {
 
 	/**
 	 * @param {string} name
-	 * @returns {import('#compiler').Binding | null}
+	 * @returns {Binding | null}
 	 */
 	get(name) {
 		return this.declarations.get(name) ?? this.parent?.get(name) ?? null;
 	}
 
 	/**
-	 * @param {import('estree').VariableDeclarator | import('#compiler').LetDirective} node
-	 * @returns {import('#compiler').Binding[]}
+	 * @param {VariableDeclarator | LetDirective} node
+	 * @returns {Binding[]}
 	 */
 	get_bindings(node) {
 		const bindings = this.declarators.get(node);
@@ -185,8 +188,8 @@ export class Scope {
 	}
 
 	/**
-	 * @param {import('estree').Identifier} node
-	 * @param {import('#compiler').SvelteNode[]} path
+	 * @param {Identifier} node
+	 * @param {SvelteNode[]} path
 	 */
 	reference(node, path) {
 		path = [...path]; // ensure that mutations to path afterwards don't affect this reference
@@ -232,7 +235,7 @@ export class ScopeRoot {
 }
 
 /**
- * @param {import('#compiler').SvelteNode} ast
+ * @param {SvelteNode} ast
  * @param {ScopeRoot} root
  * @param {boolean} allow_reactive_declarations
  * @param {Scope | null} parent
@@ -242,7 +245,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 
 	/**
 	 * A map of node->associated scope. A node appearing in this map does not necessarily mean that it created a scope
-	 * @type {Map<import('#compiler').SvelteNode, Scope>}
+	 * @type {Map<SvelteNode, Scope>}
 	 */
 	const scopes = new Map();
 	const scope = new Scope(root, parent, false);
@@ -251,21 +254,21 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 	/** @type {State} */
 	const state = { scope };
 
-	/** @type {[Scope, { node: import('estree').Identifier; path: import('#compiler').SvelteNode[] }][]} */
+	/** @type {[Scope, { node: Identifier; path: SvelteNode[] }][]} */
 	const references = [];
 
-	/** @type {[Scope, import('estree').Pattern | import('estree').MemberExpression][]} */
+	/** @type {[Scope, Pattern | MemberExpression][]} */
 	const updates = [];
 
 	/**
 	 * An array of reactive declarations, i.e. the `a` in `$: a = b * 2`
-	 * @type {import('estree').Identifier[]}
+	 * @type {Identifier[]}
 	 */
 	const possible_implicit_declarations = [];
 
 	/**
 	 * @param {Scope} scope
-	 * @param {import('estree').Pattern[]} params
+	 * @param {Pattern[]} params
 	 */
 	function add_params(scope, params) {
 		for (const param of params) {
@@ -276,7 +279,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 	}
 
 	/**
-	 * @type {import('zimmerframe').Visitor<import('estree').Node, State, import('#compiler').SvelteNode>}
+	 * @type {Visitor<Node, State, SvelteNode>}
 	 */
 	const create_block_scope = (node, { state, next }) => {
 		const scope = state.scope.child(true);
@@ -286,58 +289,53 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 	};
 
 	/**
-	 * @type {import('zimmerframe').Visitor<import('#compiler').ElementLike, State, import('#compiler').SvelteNode>}
+	 * @type {Visitor<ElementLike, State, SvelteNode>}
 	 */
 	const SvelteFragment = (node, { state, next }) => {
-		const [scope] = analyze_let_directives(node, state.scope);
+		const scope = state.scope.child();
 		scopes.set(node, scope);
 		next({ scope });
 	};
 
 	/**
-	 * @param {import('#compiler').ElementLike} node
-	 * @param {Scope} parent
+	 * @type {Visitor<Component | SvelteComponent | SvelteSelf, State, SvelteNode>}
 	 */
-	function analyze_let_directives(node, parent) {
-		const scope = parent.child();
-		let is_default_slot = true;
+	const Component = (node, context) => {
+		node.metadata.scopes = {
+			default: context.state.scope.child()
+		};
+
+		const default_state = determine_slot(node)
+			? context.state
+			: { scope: node.metadata.scopes.default };
 
 		for (const attribute of node.attributes) {
 			if (attribute.type === 'LetDirective') {
-				/** @type {import('#compiler').Binding[]} */
-				const bindings = [];
-				scope.declarators.set(attribute, bindings);
-
-				// attach the scope to the directive itself, as well as the
-				// contents to which it applies
-				scopes.set(attribute, scope);
-
-				if (attribute.expression) {
-					for (const id of extract_identifiers_from_destructuring(attribute.expression)) {
-						const binding = scope.declare(id, 'derived', 'const');
-						bindings.push(binding);
-					}
-				} else {
-					/** @type {import('estree').Identifier} */
-					const id = {
-						name: attribute.name,
-						type: 'Identifier',
-						start: attribute.start,
-						end: attribute.end
-					};
-					const binding = scope.declare(id, 'derived', 'const');
-					bindings.push(binding);
-				}
-			} else if (attribute.type === 'Attribute' && attribute.name === 'slot') {
-				is_default_slot = false;
+				context.visit(attribute, default_state);
+			} else {
+				context.visit(attribute);
 			}
 		}
 
-		return /** @type {const} */ ([scope, is_default_slot]);
-	}
+		for (const child of node.fragment.nodes) {
+			let state = default_state;
+
+			const slot_name = determine_slot(child);
+
+			if (slot_name !== null) {
+				node.metadata.scopes[slot_name] = context.state.scope.child();
+
+				state = {
+					scope: node.metadata.scopes[slot_name]
+				};
+			}
+
+			context.visit(child, state);
+		}
+	};
 
 	/**
-	 * @type {import('zimmerframe').Visitor<import('#compiler').AnimateDirective | import('#compiler').TransitionDirective | import('#compiler').UseDirective, State, import('#compiler').SvelteNode>}
+	 * @type {Visitor<AnimateDirective | TransitionDirective | UseDirective, State, SvelteNode>}
 	 */
 	const SvelteDirective = (node, { state, path, visit }) => {
 		state.scope.reference(b.id(node.name.split('.')[0]), path);
@@ -351,7 +349,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		// references
 		Identifier(node, { path, state }) {
 			const parent = path.at(-1);
-			if (parent && is_reference(node, /** @type {import('estree').Node} */ (parent))) {
+			if (parent && is_reference(node, /** @type {Node} */ (parent))) {
 				references.push([state.scope, { node, path: path.slice() }]);
 			}
 		},
@@ -383,48 +381,37 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		SvelteElement: SvelteFragment,
 		RegularElement: SvelteFragment,
 
-		Component(node, { state, visit, path }) {
-			state.scope.reference(b.id(node.name), path);
+		LetDirective(node, context) {
+			const scope = context.state.scope;
 
-			// let:x is super weird:
-			// - for the default slot, its scope only applies to children that are not slots themselves
-			// - for named slots, its scope applies to the component itself, too
-			const [scope, is_default_slot] = analyze_let_directives(node, state.scope);
-			if (is_default_slot) {
-				for (const attribute of node.attributes) {
-					visit(attribute);
+			/** @type {Binding[]} */
+			const bindings = [];
+			scope.declarators.set(node, bindings);
+
+			if (node.expression) {
+				for (const id of extract_identifiers_from_destructuring(node.expression)) {
+					const binding = scope.declare(id, 'template', 'const');
+					bindings.push(binding);
 				}
 			} else {
-				scopes.set(node, scope);
-
-				for (const attribute of node.attributes) {
-					visit(attribute, { ...state, scope });
-				}
-			}
-
-			for (const child of node.fragment.nodes) {
-				if (
-					is_element_node(child) &&
-					child.attributes.some(
-						(attribute) => attribute.type === 'Attribute' && attribute.name === 'slot'
-					)
-				) {
-					// <div slot="..."> inherits the scope above the component unless the component is a named slot itself, because slots are hella weird
-					scopes.set(child, is_default_slot ? state.scope : scope);
-					visit(child, { scope: is_default_slot ? state.scope : scope });
-				} else {
-					if (child.type === 'ExpressionTag') {
-						// expression tag is a special case — we don't visit it directly, but via process_children,
-						// so we need to set the scope on the expression rather than the tag itself
-						scopes.set(child.expression, scope);
-					} else {
-						scopes.set(child, scope);
-					}
-
-					visit(child, { scope });
-				}
+				/** @type {Identifier} */
+				const id = {
+					name: node.name,
+					type: 'Identifier',
+					start: node.start,
+					end: node.end
+				};
+				const binding = scope.declare(id, 'template', 'const');
+				bindings.push(binding);
 			}
 		},
+
+		Component: (node, context) => {
+			context.state.scope.reference(b.id(node.name), context.path);
+			Component(node, context);
+		},
+		SvelteSelf: Component,
+		SvelteComponent: Component,
 
 		// updates
 		AssignmentExpression(node, { state, next }) {
@@ -433,12 +420,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		},
 
 		UpdateExpression(node, { state, next }) {
-			updates.push([
-				state.scope,
-				/** @type {import('estree').Identifier | import('estree').MemberExpression} */ (
-					node.argument
-				)
-			]);
+			updates.push([state.scope, /** @type {Identifier | MemberExpression} */ (node.argument)]);
 			next();
 		},
 
@@ -479,8 +461,20 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		ForStatement: create_block_scope,
 		ForInStatement: create_block_scope,
 		ForOfStatement: create_block_scope,
-		BlockStatement: create_block_scope,
 		SwitchStatement: create_block_scope,
+		BlockStatement(node, context) {
+			const parent = context.path.at(-1);
+			if (
+				parent?.type === 'FunctionDeclaration' ||
+				parent?.type === 'FunctionExpression' ||
+				parent?.type === 'ArrowFunctionExpression'
+			) {
+				// We already created a new scope for the function
+				context.next();
+			} else {
+				create_block_scope(node, context);
+			}
+		},
 
 		ClassDeclaration(node, { state, next }) {
 			if (node.id) state.scope.declare(node.id, 'normal', 'let', node);
@@ -490,7 +484,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		VariableDeclaration(node, { state, path, next }) {
 			const is_parent_const_tag = path.at(-1)?.type === 'ConstTag';
 			for (const declarator of node.declarations) {
-				/** @type {import('#compiler').Binding[]} */
+				/** @type {Binding[]} */
 				const bindings = [];
 
 				state.scope.declarators.set(declarator, bindings);
@@ -498,7 +492,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 				for (const id of extract_identifiers(declarator.id)) {
 					const binding = state.scope.declare(
 						id,
-						is_parent_const_tag ? 'derived' : 'normal',
+						is_parent_const_tag ? 'template' : 'normal',
 						node.kind,
 						declarator.init
 					);
@@ -525,18 +519,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		},
 
 		EachBlock(node, { state, visit }) {
-			// Array part is still from the scope above
-			/** @type {Set<import('estree').Identifier>} */
-			const references_within = new Set();
-			const idx = references.length;
 			visit(node.expression);
-			for (let i = idx; i < references.length; i++) {
-				const [scope, { node: id }] = references[i];
-				if (scope === state.scope) {
-					references_within.add(id);
-				}
-			}
-			scopes.set(node.expression, state.scope);
 
 			// context and children are a new scope
 			const scope = state.scope.child();
@@ -564,9 +547,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 
 				binding.metadata = { inside_rest: is_rest_id };
 			}
-			if (node.context.type !== 'Identifier') {
-				scope.declare(b.id('$$item'), 'derived', 'synthetic');
-			}
+
 			// Visit to pick up references from default initializers
 			visit(node.context, { scope });
 
@@ -574,7 +555,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 				const is_keyed =
 					node.key &&
 					(node.key.type !== 'Identifier' || !node.index || node.key.name !== node.index);
-				scope.declare(b.id(node.index), is_keyed ? 'derived' : 'normal', 'const', node);
+				scope.declare(b.id(node.index), is_keyed ? 'template' : 'normal', 'const', node);
 			}
 			if (node.key) visit(node.key, { scope });
 
@@ -595,14 +576,12 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 			}
 
 			node.metadata = {
+				expression: create_expression_metadata(),
+				keyed: false,
 				contains_group_binding: false,
 				array_name: needs_array_deduplication ? state.scope.root.unique('$$array') : null,
 				index: scope.root.unique('$$index'),
-				item: node.context.type === 'Identifier' ? node.context : b.id('$$item'),
 				declarations: scope.declarations,
-				references: [...references_within]
-					.map((id) => /** @type {import('#compiler').Binding} */ (state.scope.get(id.name)))
-					.filter(Boolean),
 				is_controlled: false
 			};
 		},
@@ -622,7 +601,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 					scopes.set(node.value, value_scope);
 					context.visit(node.value, { scope: value_scope });
 					for (const id of extract_identifiers(node.value)) {
-						then_scope.declare(id, 'derived', 'const');
+						then_scope.declare(id, 'template', 'const');
 						value_scope.declare(id, 'normal', 'const');
 					}
 				}
@@ -636,7 +615,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 					scopes.set(node.error, error_scope);
 					context.visit(node.error, { scope: error_scope });
 					for (const id of extract_identifiers(node.error)) {
-						catch_scope.declare(id, 'derived', 'const');
+						catch_scope.declare(id, 'template', 'const');
 						error_scope.declare(id, 'normal', 'const');
 					}
 				}
@@ -666,7 +645,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		},
 
 		Fragment: (node, context) => {
-			const scope = context.state.scope.child(node.transparent);
+			const scope = context.state.scope.child(node.metadata.transparent);
 			scopes.set(node, scope);
 			context.next({ scope });
 		},
@@ -674,9 +653,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		BindDirective(node, context) {
 			updates.push([
 				context.state.scope,
-				/** @type {import('estree').Identifier | import('estree').MemberExpression} */ (
-					node.expression
-				)
+				/** @type {Identifier | MemberExpression} */ (node.expression)
 			]);
 			context.next();
 		},
@@ -691,7 +668,7 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 		// the css property
 		StyleDirective(node, { path, state, next }) {
 			if (node.value === true) {
-				state.scope.reference(b.id(node.name), path);
+				state.scope.reference(b.id(node.name), path.concat(node));
 			}
 			next();
 		}
@@ -713,25 +690,19 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 	}
 
 	for (const [scope, node] of updates) {
-		if (node.type === 'MemberExpression') {
-			let object = node.object;
-			while (object.type === 'MemberExpression') {
-				object = object.object;
-			}
+		for (const expression of unwrap_pattern(node)) {
+			const left = object(expression);
+			const binding = left && scope.get(left.name);
 
-			const binding = scope.get(/** @type {import('estree').Identifier} */ (object).name);
-			if (binding) binding.mutated = true;
-		} else {
-			unwrap_pattern(node).forEach((node) => {
-				let id = node.type === 'Identifier' ? node : object(node);
-				if (id === null) return;
+			if (binding !== null && left !== binding.node) {
+				binding.updated = true;
 
-				const binding = scope.get(id.name);
-				if (binding && id !== binding.node) {
+				if (left === expression) {
+					binding.reassigned = true;
+				} else {
 					binding.mutated = true;
-					binding.reassigned = node.type === 'Identifier';
 				}
-			});
+			}
 		}
 	}
 
@@ -742,29 +713,19 @@ export function create_scopes(ast, root, allow_reactive_declarations, parent) {
 }
 
 /**
- * @template {{ scope: Scope }} State
- * @param {Map<import('#compiler').SvelteNode, Scope>} scopes
- * @returns {import('zimmerframe').Visitors<import('#compiler').SvelteNode, State>}
+ * @template {{ scope: Scope, scopes: Map<SvelteNode, Scope> }} State
+ * @param {SvelteNode} node
+ * @param {Context<SvelteNode, State>} context
  */
-export function set_scope(scopes) {
-	return {
-		/**
-		 *
-		 * @param {import('#compiler').SvelteNode} node
-		 * @param {import('zimmerframe').Context<import('#compiler').SvelteNode, State>} context
-		 */
-		_(node, { next, state }) {
-			const scope = scopes.get(node);
-			next(scope !== undefined && scope !== state.scope ? { ...state, scope } : state);
-		}
-	};
+export function set_scope(node, { next, state }) {
+	const scope = state.scopes.get(node);
+	next(scope !== undefined && scope !== state.scope ? { ...state, scope } : state);
 }
 
 /**
  * Returns the name of the rune if the given expression is a `CallExpression` using a rune.
- * @param {import('estree').Node | import('../types/template.js').EachBlock | null | undefined} node
+ * @param {Node | EachBlock | null | undefined} node
  * @param {Scope} scope
- * @returns {Runes[number] | null}
  */
 export function get_rune(node, scope) {
 	if (!node) return null;
@@ -790,10 +751,10 @@ export function get_rune(node, scope) {
 
 	joined = n.name + joined;
 
-	if (!Runes.includes(/** @type {any} */ (joined))) return null;
+	if (!is_rune(joined)) return null;
 
 	const binding = scope.get(n.name);
 	if (binding !== null) return null; // rune name, but references a variable or store
 
-	return /** @type {typeof Runes[number] | null} */ (joined);
+	return joined;
 }

@@ -8,6 +8,7 @@ import { suite, assert_ok, type BaseTest } from '../suite.js';
 import { createClassComponent } from 'svelte/legacy';
 import { render } from 'svelte/server';
 import type { CompileOptions } from '#compiler';
+import { flushSync } from 'svelte';
 
 interface HydrationTest extends BaseTest {
 	load_compiled?: boolean;
@@ -112,14 +113,16 @@ const { test, run } = suite<HydrationTest>(async (config, cwd) => {
 			throw new Error(`Unexpected errors: ${errors.join('\n')}`);
 		}
 
-		if (!override) {
-			const expected = read(`${cwd}/_expected.html`) ?? rendered.html;
-			assert.equal(target.innerHTML.trim(), expected.trim());
-		}
+		flushSync();
+
+		const normalize = (string: string) => string.trim().replace(/\r\n/g, '\n');
+
+		const expected = read(`${cwd}/_expected.html`) ?? rendered.html;
+		assert.equal(normalize(target.innerHTML), normalize(expected));
 
 		if (rendered.head) {
 			const expected = read(`${cwd}/_expected_head.html`) ?? rendered.head;
-			assert.equal(head.innerHTML.trim(), expected.trim());
+			assert.equal(normalize(head.innerHTML), normalize(expected));
 		}
 
 		if (config.snapshot) {

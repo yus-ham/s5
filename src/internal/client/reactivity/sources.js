@@ -1,3 +1,4 @@
+/** @import { Derived, Effect, Reaction, Source, Value } from '#client' */
 import { DEV } from 'esm-env';
 import {
 	current_component_context,
@@ -12,7 +13,9 @@ import {
 	set_signal_status,
 	untrack,
 	increment_version,
-	update_effect
+	update_effect,
+	derived_sources,
+	set_derived_sources
 } from '../runtime.js';
 import { equals, safe_equals } from './equality.js';
 import {
@@ -31,9 +34,8 @@ let inspect_effects = new Set();
 /**
  * @template V
  * @param {V} v
- * @returns {import('#client').Source<V>}
+ * @returns {Source<V>}
  */
-/*#__NO_SIDE_EFFECTS__*/
 export function source(v) {
 	return {
 		f: 0, // TODO ideally we could skip this altogether, but it causes type errors
@@ -46,8 +48,16 @@ export function source(v) {
 
 /**
  * @template V
+ * @param {V} v
+ */
+export function state(v) {
+	return push_derived_source(source(v));
+}
+
+/**
+ * @template V
  * @param {V} initial_value
- * @returns {import('#client').Source<V>}
+ * @returns {Source<V>}
  */
 /*#__NO_SIDE_EFFECTS__*/
 export function mutable_source(initial_value) {
@@ -65,7 +75,33 @@ export function mutable_source(initial_value) {
 
 /**
  * @template V
- * @param {import('#client').Value<V>} source
+ * @param {V} v
+ * @returns {Source<V>}
+ */
+export function mutable_state(v) {
+	return push_derived_source(mutable_source(v));
+}
+
+/**
+ * @template V
+ * @param {Source<V>} source
+ */
+/*#__NO_SIDE_EFFECTS__*/
+function push_derived_source(source) {
+	if (current_reaction !== null && (current_reaction.f & DERIVED) !== 0) {
+		if (derived_sources === null) {
+			set_derived_sources([source]);
+		} else {
+			derived_sources.push(source);
+		}
+	}
+
+	return source;
+}
+
+/**
+ * @template V
+ * @param {Value<V>} source
  * @param {V} value
  */
 export function mutate(source, value) {
@@ -78,12 +114,19 @@ export function mutate(source, value) {
 
 /**
  * @template V
- * @param {import('#client').Source<V>} source
+ * @param {Source<V>} source
  * @param {V} value
  * @returns {V}
  */
 export function set(source, value) {
-	if (current_reaction !== null && is_runes() && (current_reaction.f & DERIVED) !== 0) {
+	if (
+		current_reaction !== null &&
+		is_runes() &&
+		(current_reaction.f & DERIVED) !== 0 &&
+		// If the source was created locally within the current derived, then
+		// we allow the mutation.
+		(derived_sources === null || !derived_sources.includes(source))
+	) {
 		e.state_unsafe_mutation();
 	}
 
@@ -129,7 +172,7 @@ export function set(source, value) {
 }
 
 /**
- * @param {import('#client').Value} signal
+ * @param {Value} signal
  * @param {number} status should be DIRTY or MAYBE_DIRTY
  * @returns {void}
  */
@@ -161,9 +204,9 @@ function mark_reactions(signal, status) {
 		// If the signal a) was previously clean or b) is an unowned derived, then mark it
 		if ((flags & (CLEAN | UNOWNED)) !== 0) {
 			if ((flags & DERIVED) !== 0) {
-				mark_reactions(/** @type {import('#client').Derived} */ (reaction), MAYBE_DIRTY);
+				mark_reactions(/** @type {Derived} */ (reaction), MAYBE_DIRTY);
 			} else {
-				schedule_effect(/** @type {import('#client').Effect} */ (reaction));
+				schedule_effect(/** @type {Effect} */ (reaction));
 			}
 		}
 	}

@@ -1,3 +1,4 @@
+/** @import { ComponentContext, Derived, Effect, Reaction, Signal, Source, Value } from '#client' */
 import { DEV } from 'esm-env';
 import { define_property, get_descriptors, get_prototype_of } from '../shared/utils.js';
 import {
@@ -57,33 +58,47 @@ export function set_is_destroying_effect(value) {
 
 // Handle effect queues
 
-/** @type {import('#client').Effect[]} */
+/** @type {Effect[]} */
 let current_queued_root_effects = [];
 
 let flush_count = 0;
 // Handle signal reactivity tree dependencies and reactions
 
-/** @type {null | import('#client').Reaction} */
+/** @type {null | Reaction} */
 export let current_reaction = null;
 
-/** @param {null | import('#client').Reaction} reaction */
+/** @param {null | Reaction} reaction */
 export function set_current_reaction(reaction) {
 	current_reaction = reaction;
 }
 
-/** @type {null | import('#client').Effect} */
+/** @type {null | Effect} */
 export let current_effect = null;
 
-/** @param {null | import('#client').Effect} effect */
+/** @param {null | Effect} effect */
 export function set_current_effect(effect) {
 	current_effect = effect;
+}
+
+/**
+ * When sources are created within a derived, we record them so that we can safely allow
+ * local mutations to these sources without the side-effect error being invoked unnecessarily.
+ * @type {null | Source[]}
+ */
+export let derived_sources = null;
+
+/**
+ * @param {Source[] | null} sources
+ */
+export function set_derived_sources(sources) {
+	derived_sources = sources;
 }
 
 /**
  * The dependencies of the reaction that is currently being executed. In many cases,
  * the dependencies are unchanged between runs, and so this will be `null` unless
  * and until a new dependency is accessed — we track this via `skipped_deps`
- * @type {null | import('#client').Value[]}
+ * @type {null | Value[]}
  */
 export let new_deps = null;
 
@@ -92,11 +107,11 @@ let skipped_deps = 0;
 /**
  * Tracks writes that the effect it's executed in doesn't listen to yet,
  * so that the dependency can be added to the effect later on if it then reads it
- * @type {null | import('#client').Source[]}
+ * @type {null | Source[]}
  */
 export let current_untracked_writes = null;
 
-/** @param {null | import('#client').Source[]} value */
+/** @param {null | Source[]} value */
 export function set_current_untracked_writes(value) {
 	current_untracked_writes = value;
 }
@@ -112,10 +127,10 @@ export let is_signals_recorded = false;
 let captured_signals = new Set();
 
 // Handling runtime component context
-/** @type {import('#client').ComponentContext | null} */
+/** @type {ComponentContext | null} */
 export let current_component_context = null;
 
-/** @param {import('#client').ComponentContext | null} context */
+/** @param {ComponentContext | null} context */
 export function set_current_component_context(context) {
 	current_component_context = context;
 }
@@ -128,11 +143,11 @@ export function set_current_component_context(context) {
  *   <Bar /> <!-- context == Foo.svelte, function == App.svelte -->
  * </Foo>
  * ```
- * @type {import('#client').ComponentContext['function']}
+ * @type {ComponentContext['function']}
  */
 export let dev_current_component_function = null;
 
-/** @param {import('#client').ComponentContext['function']} fn */
+/** @param {ComponentContext['function']} fn */
 export function set_dev_current_component_function(fn) {
 	dev_current_component_function = fn;
 }
@@ -149,7 +164,7 @@ export function is_runes() {
 /**
  * Determines whether a derived or effect is dirty.
  * If it is MAYBE_DIRTY, will set the status to CLEAN
- * @param {import('#client').Reaction} reaction
+ * @param {Reaction} reaction
  * @returns {boolean}
  */
 export function check_dirtiness(reaction) {
@@ -161,9 +176,9 @@ export function check_dirtiness(reaction) {
 
 	if ((flags & MAYBE_DIRTY) !== 0) {
 		var dependencies = reaction.deps;
+		var is_unowned = (flags & UNOWNED) !== 0;
 
 		if (dependencies !== null) {
-			var is_unowned = (flags & UNOWNED) !== 0;
 			var i;
 
 			if ((flags & DISCONNECTED) !== 0) {
@@ -177,8 +192,8 @@ export function check_dirtiness(reaction) {
 			for (i = 0; i < dependencies.length; i++) {
 				var dependency = dependencies[i];
 
-				if (check_dirtiness(/** @type {import('#client').Derived} */ (dependency))) {
-					update_derived(/** @type {import('#client').Derived} */ (dependency));
+				if (check_dirtiness(/** @type {Derived} */ (dependency))) {
+					update_derived(/** @type {Derived} */ (dependency));
 				}
 
 				if (dependency.version > reaction.version) {
@@ -197,7 +212,10 @@ export function check_dirtiness(reaction) {
 			}
 		}
 
-		set_signal_status(reaction, CLEAN);
+		// Unowned signals should never be marked as clean.
+		if (!is_unowned) {
+			set_signal_status(reaction, CLEAN);
+		}
 	}
 
 	return false;
@@ -205,8 +223,8 @@ export function check_dirtiness(reaction) {
 
 /**
  * @param {Error} error
- * @param {import("#client").Effect} effect
- * @param {import("#client").ComponentContext | null} component_context
+ * @param {Effect} effect
+ * @param {ComponentContext | null} component_context
  */
 function handle_error(error, effect, component_context) {
 	// Given we don't yet have error boundaries, we will just always throw.
@@ -222,16 +240,18 @@ function handle_error(error, effect, component_context) {
 		component_stack.push(effect_name);
 	}
 
-	/** @type {import("#client").ComponentContext | null} */
+	/** @type {ComponentContext | null} */
 	let current_context = component_context;
 
 	while (current_context !== null) {
-		/** @type {string} */
-		var filename = current_context.function?.[FILENAME];
+		if (DEV) {
+			/** @type {string} */
+			var filename = current_context.function?.[FILENAME];
 
-		if (filename) {
-			const file = filename.split('/').pop();
-			component_stack.push(file);
+			if (filename) {
+				const file = filename.split('/').pop();
+				component_stack.push(file);
+			}
 		}
 
 		current_context = current_context.p;
@@ -266,7 +286,7 @@ function handle_error(error, effect, component_context) {
 
 /**
  * @template V
- * @param {import('#client').Reaction} reaction
+ * @param {Reaction} reaction
  * @returns {V}
  */
 export function update_reaction(reaction) {
@@ -275,38 +295,23 @@ export function update_reaction(reaction) {
 	var previous_untracked_writes = current_untracked_writes;
 	var previous_reaction = current_reaction;
 	var previous_skip_reaction = current_skip_reaction;
+	var prev_derived_sources = derived_sources;
 
-	new_deps = /** @type {null | import('#client').Value[]} */ (null);
+	new_deps = /** @type {null | Value[]} */ (null);
 	skipped_deps = 0;
 	current_untracked_writes = null;
 	current_reaction = (reaction.f & (BRANCH_EFFECT | ROOT_EFFECT)) === 0 ? reaction : null;
 	current_skip_reaction = !is_flushing_effect && (reaction.f & UNOWNED) !== 0;
+	derived_sources = null;
 
 	try {
 		var result = /** @type {Function} */ (0, reaction.fn)();
 		var deps = reaction.deps;
 
 		if (new_deps !== null) {
-			var dependency;
 			var i;
 
-			if (deps !== null) {
-				/** All dependencies of the reaction, including those tracked on the previous run */
-				var array = skipped_deps === 0 ? new_deps : deps.slice(0, skipped_deps).concat(new_deps);
-
-				// If we have more than 16 elements in the array then use a Set for faster performance
-				// TODO: evaluate if we should always just use a Set or not here?
-				var set = array.length > 16 ? new Set(array) : null;
-
-				// Remove dependencies that should no longer be tracked
-				for (i = skipped_deps; i < deps.length; i++) {
-					dependency = deps[i];
-
-					if (set !== null ? !set.has(dependency) : !array.includes(dependency)) {
-						remove_reaction(reaction, dependency);
-					}
-				}
-			}
+			remove_reactions(reaction, skipped_deps);
 
 			if (deps !== null && skipped_deps > 0) {
 				deps.length = skipped_deps + new_deps.length;
@@ -319,17 +324,7 @@ export function update_reaction(reaction) {
 
 			if (!current_skip_reaction) {
 				for (i = skipped_deps; i < deps.length; i++) {
-					dependency = deps[i];
-					var reactions = dependency.reactions;
-
-					if (reactions === null) {
-						dependency.reactions = [reaction];
-					} else if (
-						reactions[reactions.length - 1] !== reaction &&
-						!reactions.includes(reaction)
-					) {
-						reactions.push(reaction);
-					}
+					(deps[i].reactions ??= []).push(reaction);
 				}
 			}
 		} else if (deps !== null && skipped_deps < deps.length) {
@@ -344,46 +339,46 @@ export function update_reaction(reaction) {
 		current_untracked_writes = previous_untracked_writes;
 		current_reaction = previous_reaction;
 		current_skip_reaction = previous_skip_reaction;
+		derived_sources = prev_derived_sources;
 	}
 }
 
 /**
  * @template V
- * @param {import('#client').Reaction} signal
- * @param {import('#client').Value<V>} dependency
+ * @param {Reaction} signal
+ * @param {Value<V>} dependency
  * @returns {void}
  */
 function remove_reaction(signal, dependency) {
-	const reactions = dependency.reactions;
-	let reactions_length = 0;
+	let reactions = dependency.reactions;
 	if (reactions !== null) {
-		reactions_length = reactions.length - 1;
-		const index = reactions.indexOf(signal);
+		var index = reactions.indexOf(signal);
 		if (index !== -1) {
-			if (reactions_length === 0) {
-				dependency.reactions = null;
+			var new_length = reactions.length - 1;
+			if (new_length === 0) {
+				reactions = dependency.reactions = null;
 			} else {
 				// Swap with last element and then remove.
-				reactions[index] = reactions[reactions_length];
+				reactions[index] = reactions[new_length];
 				reactions.pop();
 			}
 		}
 	}
 	// If the derived has no reactions, then we can disconnect it from the graph,
 	// allowing it to either reconnect in the future, or be GC'd by the VM.
-	if (reactions_length === 0 && (dependency.f & DERIVED) !== 0) {
+	if (reactions === null && (dependency.f & DERIVED) !== 0) {
 		set_signal_status(dependency, MAYBE_DIRTY);
 		// If we are working with a derived that is owned by an effect, then mark it as being
 		// disconnected.
 		if ((dependency.f & (UNOWNED | DISCONNECTED)) === 0) {
 			dependency.f ^= DISCONNECTED;
 		}
-		remove_reactions(/** @type {import('#client').Derived} **/ (dependency), 0);
+		remove_reactions(/** @type {Derived} **/ (dependency), 0);
 	}
 }
 
 /**
- * @param {import('#client').Reaction} signal
+ * @param {Reaction} signal
  * @param {number} start_index
  * @returns {void}
  */
@@ -391,24 +386,13 @@ export function remove_reactions(signal, start_index) {
 	var dependencies = signal.deps;
 	if (dependencies === null) return;
 
-	var active_dependencies = start_index === 0 ? null : dependencies.slice(0, start_index);
-	var seen = new Set();
-
 	for (var i = start_index; i < dependencies.length; i++) {
-		var dependency = dependencies[i];
-
-		if (seen.has(dependency)) continue;
-		seen.add(dependency);
-
-		// Avoid removing a reaction if we know that it is active (start_index will not be 0)
-		if (active_dependencies === null || !active_dependencies.includes(dependency)) {
-			remove_reaction(signal, dependency);
-		}
+		remove_reaction(signal, dependencies[i]);
 	}
 }
 
 /**
- * @param {import('#client').Reaction} signal
+ * @param {Reaction} signal
  * @param {boolean} remove_dom
  * @returns {void}
  */
@@ -424,7 +408,7 @@ export function destroy_effect_children(signal, remove_dom = false) {
 }
 
 /**
- * @param {import('#client').Effect} effect
+ * @param {Effect} effect
  * @returns {void}
  */
 export function update_effect(effect) {
@@ -480,7 +464,7 @@ function infinite_loop_guard() {
 }
 
 /**
- * @param {Array<import('#client').Effect>} root_effects
+ * @param {Array<Effect>} root_effects
  * @returns {void}
  */
 function flush_queued_root_effects(root_effects) {
@@ -501,7 +485,7 @@ function flush_queued_root_effects(root_effects) {
 			if (effect.first === null && (effect.f & BRANCH_EFFECT) === 0) {
 				flush_queued_effects([effect]);
 			} else {
-				/** @type {import('#client').Effect[]} */
+				/** @type {Effect[]} */
 				var collected_effects = [];
 
 				process_effects(effect, collected_effects);
@@ -514,7 +498,7 @@ function flush_queued_root_effects(root_effects) {
 }
 
 /**
- * @param {Array<import('#client').Effect>} effects
+ * @param {Array<Effect>} effects
  * @returns {void}
  */
 function flush_queued_effects(effects) {
@@ -532,7 +516,7 @@ function flush_queued_effects(effects) {
 			// don't know if we need to keep them until they are executed. Doing the check
 			// here (rather than in `update_effect`) allows us to skip the work for
 			// immediate effects.
-			if (effect.deps === null && effect.first === null && effect.nodes === null) {
+			if (effect.deps === null && effect.first === null && effect.nodes_start === null) {
 				if (effect.teardown === null) {
 					// remove this effect from the graph
 					unlink_effect(effect);
@@ -559,7 +543,7 @@ function process_deferred() {
 }
 
 /**
- * @param {import('#client').Effect} signal
+ * @param {Effect} signal
  * @returns {void}
  */
 export function schedule_effect(signal) {
@@ -592,8 +576,8 @@ export function schedule_effect(signal) {
  * bitwise flag passed in only. The collected effects array will be populated with all the user
  * effects to be flushed.
  *
- * @param {import('#client').Effect} effect
- * @param {import('#client').Effect[]} collected_effects
+ * @param {Effect} effect
+ * @param {Effect[]} collected_effects
  * @returns {void}
  */
 function process_effects(effect, collected_effects) {
@@ -604,7 +588,7 @@ function process_effects(effect, collected_effects) {
 		var flags = current_effect.f;
 		// TODO: we probably don't need to check for destroyed as it shouldn't be encountered?
 		var is_active = (flags & (DESTROYED | INERT)) === 0;
-		var is_branch = flags & BRANCH_EFFECT;
+		var is_branch = (flags & BRANCH_EFFECT) !== 0;
 		var is_clean = (flags & CLEAN) !== 0;
 		var child = current_effect.first;
 
@@ -670,26 +654,23 @@ function process_effects(effect, collected_effects) {
  * Internal version of `flushSync` with the option to not flush previous effects.
  * Returns the result of the passed function, if given.
  * @param {() => any} [fn]
- * @param {boolean} [flush_previous]
  * @returns {any}
  */
-export function flush_sync(fn, flush_previous = true) {
+export function flush_sync(fn) {
 	var previous_scheduler_mode = current_scheduler_mode;
 	var previous_queued_root_effects = current_queued_root_effects;
 
 	try {
 		infinite_loop_guard();
 
-		/** @type {import('#client').Effect[]} */
+		/** @type {Effect[]} */
 		const root_effects = [];
 
 		current_scheduler_mode = FLUSH_SYNC;
 		current_queued_root_effects = root_effects;
 		is_micro_task_queued = false;
 
-		if (flush_previous) {
-			flush_queued_root_effects(previous_queued_root_effects);
-		}
+		flush_queued_root_effects(previous_queued_root_effects);
 
 		var result = fn?.();
 
@@ -720,7 +701,7 @@ export async function tick() {
 
 /**
  * @template V
- * @param {import('#client').Value<V>} signal
+ * @param {Value<V>} signal
  * @returns {V}
  */
 export function get(signal) {
@@ -736,6 +717,9 @@ export function get(signal) {
 
 	// Register the dependency on the current reaction signal.
 	if (current_reaction !== null) {
+		if (derived_sources !== null && derived_sources.includes(signal)) {
+			e.state_unsafe_local_read();
+		}
 		var deps = current_reaction.deps;
 
 		// If the signal is accessing the same dependencies in the same
@@ -743,16 +727,10 @@ export function get(signal) {
 		// rather than updating `new_deps`, which creates GC cost
 		if (new_deps === null && deps !== null && deps[skipped_deps] === signal) {
 			skipped_deps++;
-		}
-
-		// Otherwise, create or push to `new_deps`, but only if this
-		// dependency wasn't the last one that was accessed
-		else if (deps === null || skipped_deps === 0 || deps[skipped_deps - 1] !== signal) {
-			if (new_deps === null) {
-				new_deps = [signal];
-			} else if (new_deps[new_deps.length - 1] !== signal) {
-				new_deps.push(signal);
-			}
+		} else if (new_deps === null) {
+			new_deps = [signal];
+		} else {
+			new_deps.push(signal);
 		}
 
 		if (
@@ -768,7 +746,7 @@ export function get(signal) {
 	}
 
 	if ((flags & DERIVED) !== 0) {
-		var derived = /** @type {import('#client').Derived} */ (signal);
+		var derived = /** @type {Derived} */ (signal);
 
 		if (check_dirtiness(derived)) {
 			update_derived(derived);
@@ -776,6 +754,16 @@ export function get(signal) {
 	}
 
 	return signal.v;
+}
+
+/**
+ * Like `get`, but checks for `undefined`. Used for `var` declarations because they can be accessed before being declared
+ * @template V
+ * @param {Value<V> | undefined} signal
+ * @returns {V | undefined}
+ */
+export function safe_get(signal) {
+	return signal && get(signal);
 }
 
 /**
@@ -804,7 +792,7 @@ export function invalidate_inner_signals(fn) {
 	for (signal of captured) {
 		// Go one level up because derived signals created as part of props in legacy mode
 		if ((signal.f & LEGACY_DERIVED_PROP) !== 0) {
-			for (const dep of /** @type {import('#client').Derived} */ (signal).deps || []) {
+			for (const dep of /** @type {Derived} */ (signal).deps || []) {
 				if ((dep.f & DERIVED) === 0) {
 					mutate(dep, null /* doesnt matter */);
 				}
@@ -836,25 +824,12 @@ export function untrack(fn) {
 const STATUS_MASK = ~(DIRTY | MAYBE_DIRTY | CLEAN);
 
 /**
- * @param {import('#client').Signal} signal
+ * @param {Signal} signal
  * @param {number} status
  * @returns {void}
  */
 export function set_signal_status(signal, status) {
 	signal.f = (signal.f & STATUS_MASK) | status;
-}
-
-/**
- * @template V
- * @param {V | import('#client').Value<V>} val
- * @returns {val is import('#client').Value<V>}
- */
-export function is_signal(val) {
-	return (
-		typeof val === 'object' &&
-		val !== null &&
-		typeof (/** @type {import('#client').Value<V>} */ (val).f) === 'number'
-	);
 }
 
 /**
@@ -871,8 +846,7 @@ export function getContext(key) {
 	const result = /** @type {T} */ (context_map.get(key));
 
 	if (DEV) {
-		const fn = /** @type {import('#client').ComponentContext} */ (current_component_context)
-			.function;
+		const fn = /** @type {ComponentContext} */ (current_component_context).function;
 		if (fn) {
 			add_owner(result, fn, true);
 		}
@@ -952,7 +926,7 @@ function get_or_init_context_map(name) {
 }
 
 /**
- * @param {import('#client').ComponentContext} component_context
+ * @param {ComponentContext} component_context
  * @returns {Map<unknown, unknown> | null}
  */
 function get_parent_context(component_context) {
@@ -968,7 +942,7 @@ function get_parent_context(component_context) {
 }
 
 /**
- * @param {import('#client').Value<number>} signal
+ * @param {Value<number>} signal
  * @param {1 | -1} [d]
  * @returns {number}
  */
@@ -979,7 +953,7 @@ export function update(signal, d = 1) {
 }
 
 /**
- * @param {import('#client').Value<number>} signal
+ * @param {Value<number>} signal
  * @param {1 | -1} [d]
  * @returns {number}
  */
@@ -993,32 +967,16 @@ export function update_pre(signal, d = 1) {
  * @returns {Record<string, unknown>}
  */
 export function exclude_from_object(obj, keys) {
-	obj = { ...obj };
-	let key;
-	for (key of keys) {
-		delete obj[key];
+	/** @type {Record<string, unknown>} */
+	var result = {};
+
+	for (var key in obj) {
+		if (!keys.includes(key)) {
+			result[key] = obj[key];
+		}
 	}
-	return obj;
-}
 
-/**
- * @template V
- * @param {V} value
- * @param {() => V} fallback lazy because could contain side effects
- * @returns {V}
- */
-export function value_or_fallback(value, fallback) {
-	return value === undefined ? fallback() : value;
-}
-
-/**
- * @template V
- * @param {V} value
- * @param {() => Promise<V>} fallback lazy because could contain side effects
- * @returns {Promise<V>}
- */
-export async function value_or_fallback_async(value, fallback) {
-	return value === undefined ? fallback() : value;
+	return result;
 }
 
 /**
@@ -1155,20 +1113,6 @@ export function deep_read(value, visited = new Set()) {
 			}
 		}
 	}
-}
-
-/**
- * @template V
- * @param {V | import('#client').Value<V>} value
- * @returns {V}
- */
-export function unwrap(value) {
-	if (is_signal(value)) {
-		// @ts-ignore
-		return get(value);
-	}
-	// @ts-ignore
-	return value;
 }
 
 if (DEV) {

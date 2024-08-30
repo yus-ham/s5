@@ -1,20 +1,30 @@
-/** @import { Parser } from '../index.js' */
+/** @import { Expression } from 'estree' */
 /** @import * as Compiler from '#compiler' */
-import { is_void } from '../../../../constants.js';
+/** @import { Parser } from '../index.js' */
+import { is_void } from '../../../../utils.js';
 import read_expression from '../read/expression.js';
 import { read_script } from '../read/script.js';
 import read_style from '../read/style.js';
-import { closing_tag_omitted, decode_character_references } from '../utils/html.js';
+import { decode_character_references } from '../utils/html.js';
 import * as e from '../../../errors.js';
 import * as w from '../../../warnings.js';
 import { create_fragment } from '../utils/create.js';
-import { create_attribute } from '../../nodes.js';
+import { create_attribute, create_expression_metadata } from '../../nodes.js';
+import { get_attribute_expression, is_expression_attribute } from '../../../utils/ast.js';
+import { closing_tag_omitted } from '../../../../html-tree-validation.js';
+import { list } from '../../../utils/string.js';
 
-// eslint-disable-next-line no-useless-escape
-const valid_tag_name = /^\!?[a-zA-Z]{1,}:?[a-zA-Z0-9\-]*/;
-
-/** Invalid attribute characters if the attribute is not surrounded by quotes */
-const regex_starts_with_invalid_attr_value = /^(\/>|[\s"'=<>`])/;
+const regex_invalid_unquoted_attribute_value = /^(\/>|[\s"'=<>`])/;
+const regex_closing_textarea_tag = /^<\/textarea(\s[^>]*)?>/i;
+const regex_closing_comment = /-->/;
+const regex_whitespace_or_slash_or_closing_tag = /(\s|\/|>)/;
+const regex_token_ending_character = /[\s=/>"']/;
+const regex_starts_with_quote_characters = /^["']/;
+const regex_attribute_value = /^(?:"([^"]*)"|'([^'])*'|([^>\s]+))/;
+const regex_valid_element_name =
+	/^(?:![a-zA-Z]+|[a-zA-Z](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?|[a-zA-Z][a-zA-Z0-9]*:[a-zA-Z][a-zA-Z0-9-]*[a-zA-Z0-9])$/;
+const regex_valid_component_name =
+	/^(?:[A-Z][A-Za-z0-9_$.]*|[a-z][A-Za-z0-9_$]*(?:\.[A-Za-z0-9_$]+)+)$/;
 
 /** @type {Map<string, Compiler.ElementLike['type']>} */
 const root_only_meta_tags = new Map([
@@ -33,45 +43,6 @@ const meta_tags = new Map([
 	['svelte:self', 'SvelteSelf'],
 	['svelte:fragment', 'SvelteFragment']
 ]);
-
-const valid_meta_tags = Array.from(meta_tags.keys());
-
-const SELF = /^svelte:self(?=[\s/>])/;
-const COMPONENT = /^svelte:component(?=[\s/>])/;
-const SLOT = /^svelte:fragment(?=[\s/>])/;
-const ELEMENT = /^svelte:element(?=[\s/>])/;
-
-/** @param {Compiler.TemplateNode[]} stack */
-function parent_is_head(stack) {
-	let i = stack.length;
-	while (i--) {
-		const { type } = stack[i];
-		if (type === 'SvelteHead') return true;
-		if (type === 'RegularElement' || type === 'Component') return false;
-	}
-	return false;
-}
-
-/** @param {Compiler.TemplateNode[]} stack */
-function parent_is_shadowroot_template(stack) {
-	// https://developer.chrome.com/docs/css-ui/declarative-shadow-dom#building_a_declarative_shadow_root
-	let i = stack.length;
-	while (i--) {
-		if (
-			stack[i].type === 'RegularElement' &&
-			/** @type {Compiler.RegularElement} */ (stack[i]).attributes.some(
-				(a) => a.type === 'Attribute' && a.name === 'shadowrootmode'
-			)
-		) {
-			return true;
-		}
-	}
-	return false;
-}
-
-const regex_closing_textarea_tag = /^<\/textarea(\s[^>]*)?>/i;
-const regex_closing_comment = /-->/;
-const regex_capital_letter = /[A-Z]/;
 
 /** @param {Parser} parser */
 export default function element(parser) {
@@ -95,83 +66,15 @@ export default function element(parser) {
 	}
 
 	const is_closing_tag = parser.eat('/');
-
-	const name = read_tag_name(parser);
-
-	if (root_only_meta_tags.has(name)) {
-		if (is_closing_tag) {
-			if (
-				['svelte:options', 'svelte:window', 'svelte:body', 'svelte:document'].includes(name) &&
-				/** @type {Compiler.ElementLike} */ (parent).fragment.nodes.length
-			) {
-				e.svelte_meta_invalid_content(
-					/** @type {Compiler.ElementLike} */ (parent).fragment.nodes[0].start,
-					name
-				);
-			}
-		} else {
-			if (name in parser.meta_tags) {
-				e.svelte_meta_duplicate(start, name);
-			}
-
-			if (parent.type !== 'Root') {
-				e.svelte_meta_invalid_placement(start, name);
-			}
-
-			parser.meta_tags[name] = true;
-		}
-	}
-
-	const type = meta_tags.has(name)
-		? meta_tags.get(name)
-		: regex_capital_letter.test(name[0]) || name === 'svelte:self' || name === 'svelte:component'
-			? 'Component'
-			: name === 'title' && parent_is_head(parser.stack)
-				? 'TitleElement'
-				: // TODO Svelte 6/7: once slots are removed in favor of snippets, always keep slot as a regular element
-					name === 'slot' && !parent_is_shadowroot_template(parser.stack)
-					? 'SlotElement'
-					: 'RegularElement';
-
-	/** @type {Compiler.ElementLike} */
-	const element =
-		type === 'RegularElement'
-			? {
-					type: type,
-					start,
-					end: -1,
-					name,
-					attributes: [],
-					fragment: create_fragment(true),
-					metadata: {
-						svg: false,
-						mathml: false,
-						scoped: false,
-						has_spread: false
-					},
-					parent: null
-				}
-			: /** @type {Compiler.ElementLike} */ ({
-					type,
-					start,
-					end: -1,
-					name,
-					attributes: [],
-					fragment: create_fragment(true),
-					parent: null,
-					metadata: {
-						svg: false
-					}
-				});
-
-	parser.allow_whitespace();
+	const name = parser.read_until(regex_whitespace_or_slash_or_closing_tag);
 
 	if (is_closing_tag) {
+		parser.allow_whitespace();
+		parser.eat('>', true);
+
 		if (is_void(name)) {
 			e.void_element_invalid_content(start);
 		}
-
-		parser.eat('>', true);
 
 		// close any elements that don't have their own closing tags, e.g. <div><p></div>
 		while (/** @type {Compiler.RegularElement} */ (parent).name !== name) {
@@ -197,7 +100,75 @@ export default function element(parser) {
 		}
 
 		return;
-	} else if (parent.type === 'RegularElement' && closing_tag_omitted(parent.name, name)) {
+	}
+
+	if (name.startsWith('svelte:') && !meta_tags.has(name)) {
+		const bounds = { start: start + 1, end: start + 1 + name.length };
+		e.svelte_meta_invalid_tag(bounds, list(Array.from(meta_tags.keys())));
+	}
+
+	if (!regex_valid_element_name.test(name) && !regex_valid_component_name.test(name)) {
+		const bounds = { start: start + 1, end: start + 1 + name.length };
+		e.tag_invalid_name(bounds);
+	}
+
+	if (root_only_meta_tags.has(name)) {
+		if (name in parser.meta_tags) {
+			e.svelte_meta_duplicate(start, name);
+		}
+
+		if (parent.type !== 'Root') {
+			e.svelte_meta_invalid_placement(start, name);
+		}
+
+		parser.meta_tags[name] = true;
+	}
+
+	const type = meta_tags.has(name)
+		? meta_tags.get(name)
+		: regex_valid_component_name.test(name)
+			? 'Component'
+			: name === 'title' && parent_is_head(parser.stack)
+				? 'TitleElement'
+				: // TODO Svelte 6/7: once slots are removed in favor of snippets, always keep slot as a regular element
+					name === 'slot' && !parent_is_shadowroot_template(parser.stack)
+					? 'SlotElement'
+					: 'RegularElement';
+
+	/** @type {Compiler.ElementLike} */
+	const element =
+		type === 'RegularElement'
+			? {
+					type,
+					start,
+					end: -1,
+					name,
+					attributes: [],
+					fragment: create_fragment(true),
+					metadata: {
+						svg: false,
+						mathml: false,
+						scoped: false,
+						has_spread: false
+					},
+					parent: null
+				}
+			: /** @type {Compiler.ElementLike} */ ({
+					type,
+					start,
+					end: -1,
+					name,
+					attributes: [],
+					fragment: create_fragment(true),
+					parent: null,
+					metadata: {
+						// unpopulated at first, differs between types
+					}
+				});
+
+	parser.allow_whitespace();
+
+	if (parent.type === 'RegularElement' && closing_tag_omitted(parent.name, name)) {
 		parent.end = start;
 		parser.pop();
 		parser.last_auto_closed_tag = {
@@ -241,15 +212,11 @@ export default function element(parser) {
 		}
 
 		const definition = /** @type {Compiler.Attribute} */ (element.attributes.splice(index, 1)[0]);
-		if (
-			definition.value === true ||
-			definition.value.length !== 1 ||
-			definition.value[0].type === 'Text'
-		) {
+		if (!is_expression_attribute(definition)) {
 			e.svelte_component_invalid_this(definition.start);
 		}
 
-		element.expression = definition.value[0].expression;
+		element.expression = get_attribute_expression(definition);
 	}
 
 	if (element.type === 'SvelteElement') {
@@ -267,15 +234,16 @@ export default function element(parser) {
 			e.svelte_element_missing_this(definition);
 		}
 
-		const chunk = definition.value[0];
-
-		if (definition.value.length !== 1 || chunk.type !== 'ExpressionTag') {
+		if (!is_expression_attribute(definition)) {
 			w.svelte_element_invalid_this(definition);
 
 			// note that this is wrong, in the case of e.g. `this="h{n}"` — it will result in `<h>`.
 			// it would be much better to just error here, but we are preserving the existing buggy
 			// Svelte 4 behaviour out of an overabundance of caution regarding breaking changes.
 			// TODO in 6.0, error
+			const chunk = /** @type {Array<Compiler.ExpressionTag | Compiler.Text>} */ (
+				definition.value
+			)[0];
 			element.tag =
 				chunk.type === 'Text'
 					? {
@@ -287,7 +255,7 @@ export default function element(parser) {
 						}
 					: chunk.expression;
 		} else {
-			element.tag = chunk.expression;
+			element.tag = get_attribute_expression(definition);
 		}
 	}
 
@@ -383,63 +351,33 @@ export default function element(parser) {
 	}
 }
 
-const regex_whitespace_or_slash_or_closing_tag = /(\s|\/|>)/;
-
-/** @param {Parser} parser */
-function read_tag_name(parser) {
-	const start = parser.index;
-
-	if (parser.read(SELF)) {
-		// check we're inside a block, otherwise this
-		// will cause infinite recursion
-		let i = parser.stack.length;
-		let legal = false;
-
-		while (i--) {
-			const fragment = parser.stack[i];
-			if (
-				fragment.type === 'IfBlock' ||
-				fragment.type === 'EachBlock' ||
-				fragment.type === 'Component' ||
-				fragment.type === 'SnippetBlock'
-			) {
-				legal = true;
-				break;
-			}
-		}
-
-		if (!legal) {
-			e.svelte_self_invalid_placement(start);
-		}
-
-		return 'svelte:self';
+/** @param {Compiler.TemplateNode[]} stack */
+function parent_is_head(stack) {
+	let i = stack.length;
+	while (i--) {
+		const { type } = stack[i];
+		if (type === 'SvelteHead') return true;
+		if (type === 'RegularElement' || type === 'Component') return false;
 	}
-
-	if (parser.read(COMPONENT)) return 'svelte:component';
-	if (parser.read(ELEMENT)) return 'svelte:element';
-
-	if (parser.read(SLOT)) return 'svelte:fragment';
-
-	const name = parser.read_until(regex_whitespace_or_slash_or_closing_tag);
-
-	if (meta_tags.has(name)) return name;
-
-	if (name.startsWith('svelte:')) {
-		const list = `${valid_meta_tags.slice(0, -1).join(', ')} or ${valid_meta_tags[valid_meta_tags.length - 1]}`;
-		e.svelte_meta_invalid_tag(start, list);
-	}
-
-	if (!valid_tag_name.test(name)) {
-		e.element_invalid_tag_name(start);
-	}
-
-	return name;
+	return false;
 }
 
-// eslint-disable-next-line no-useless-escape
-const regex_token_ending_character = /[\s=\/>"']/;
-const regex_starts_with_quote_characters = /^["']/;
-const regex_attribute_value = /^(?:"([^"]*)"|'([^'])*'|([^>\s]+))/;
+/** @param {Compiler.TemplateNode[]} stack */
+function parent_is_shadowroot_template(stack) {
+	// https://developer.chrome.com/docs/css-ui/declarative-shadow-dom#building_a_declarative_shadow_root
+	let i = stack.length;
+	while (i--) {
+		if (
+			stack[i].type === 'RegularElement' &&
+			/** @type {Compiler.RegularElement} */ (stack[i]).attributes.some(
+				(a) => a.type === 'Attribute' && a.name === 'shadowrootmode'
+			)
+		) {
+			return true;
+		}
+	}
+	return false;
+}
 
 /**
  * @param {Parser} parser
@@ -511,8 +449,7 @@ function read_attribute(parser) {
 				expression,
 				parent: null,
 				metadata: {
-					contains_call_expression: false,
-					dynamic: false
+					expression: create_expression_metadata()
 				}
 			};
 
@@ -541,12 +478,11 @@ function read_attribute(parser) {
 				},
 				parent: null,
 				metadata: {
-					dynamic: false,
-					contains_call_expression: false
+					expression: create_expression_metadata()
 				}
 			};
 
-			return create_attribute(name, start, parser.index, [expression]);
+			return create_attribute(name, start, parser.index, expression);
 		}
 	}
 
@@ -560,7 +496,7 @@ function read_attribute(parser) {
 	const colon_index = name.indexOf(':');
 	const type = colon_index !== -1 && get_directive_type(name.slice(0, colon_index));
 
-	/** @type {true | Array<Compiler.Text | Compiler.ExpressionTag>} */
+	/** @type {true | Compiler.ExpressionTag | Array<Compiler.Text | Compiler.ExpressionTag>} */
 	let value = true;
 	if (parser.eat('=')) {
 		parser.allow_whitespace();
@@ -587,12 +523,14 @@ function read_attribute(parser) {
 				value,
 				parent: null,
 				metadata: {
-					dynamic: false
+					expression: create_expression_metadata()
 				}
 			};
 		}
 
-		const first_value = value === true ? undefined : value[0];
+		const first_value = value === true ? undefined : Array.isArray(value) ? value[0] : value;
+
+		/** @type {Expression | null} */
 		let expression = null;
 
 		if (first_value) {
@@ -601,6 +539,8 @@ function read_attribute(parser) {
 			if (attribute_contains_text) {
 				e.directive_invalid_value(/** @type {number} */ (first_value.start));
 			} else {
+				// TODO throw a parser error in a future version here if this `[ExpressionTag]` instead of `ExpressionTag`,
+				// which means stringified value, which isn't allowed for some directives?
 				expression = first_value.expression;
 			}
 		}
@@ -613,14 +553,11 @@ function read_attribute(parser) {
 			type,
 			name: directive_name,
 			modifiers,
-			expression
+			expression,
+			metadata: {
+				expression: create_expression_metadata()
+			}
 		};
-
-		if (directive.type === 'ClassDirective') {
-			directive.metadata = {
-				dynamic: false
-			};
-		}
 
 		if (directive.type === 'TransitionDirective') {
 			const direction = name.slice(0, colon_index);
@@ -665,6 +602,7 @@ function get_directive_type(name) {
 
 /**
  * @param {Parser} parser
+ * @return {Compiler.ExpressionTag | Array<Compiler.ExpressionTag | Compiler.Text>}
  */
 function read_attribute_value(parser) {
 	const quote_mark = parser.eat("'") ? "'" : parser.eat('"') ? '"' : null;
@@ -681,6 +619,7 @@ function read_attribute_value(parser) {
 		];
 	}
 
+	/** @type {Array<Compiler.ExpressionTag | Compiler.Text>} */
 	let value;
 	try {
 		value = read_sequence(
@@ -688,7 +627,7 @@ function read_attribute_value(parser) {
 			() => {
 				// handle common case of quote marks existing outside of regex for performance reasons
 				if (quote_mark) return parser.match(quote_mark);
-				return !!parser.match_regex(regex_starts_with_invalid_attr_value);
+				return !!parser.match_regex(regex_invalid_unquoted_attribute_value);
 			},
 			'in attribute value'
 		);
@@ -711,7 +650,12 @@ function read_attribute_value(parser) {
 	}
 
 	if (quote_mark) parser.index += 1;
-	return value;
+
+	if (quote_mark || value.length > 1 || value[0].type === 'Text') {
+		return value;
+	} else {
+		return value[0];
+	}
 }
 
 /**
@@ -777,8 +721,7 @@ function read_sequence(parser, done, location) {
 				expression,
 				parent: null,
 				metadata: {
-					contains_call_expression: false,
-					dynamic: false
+					expression: create_expression_metadata()
 				}
 			};
 

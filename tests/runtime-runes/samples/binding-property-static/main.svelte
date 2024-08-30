@@ -5,7 +5,7 @@
 		value: 1
 	};
 
-	let frozen = $state.frozen({
+	let raw = $state.raw({
 		value: 2
 	});
 
@@ -48,9 +48,12 @@
 
 <!-- should warn -->
 <input bind:value={pojo.value} />
-<input bind:value={frozen.value} />
+<input bind:value={raw.value} />
 <Child bind:value={pojo.value} />
-<Child bind:value={frozen.value} />
+<Child bind:value={raw.value} />
+{#if value}
+	<div bind:this={pojo.value}></div>
+{/if}
 
 <!-- should not warn -->
 <input bind:value={reactive.value} />
@@ -59,3 +62,4 @@
 <Child bind:value={reactive.value} />
 <Child bind:value={accessors.value} />
 <Child bind:value={proxy.value} />
+<div bind:this={pojo.value}></div>

@@ -56,7 +56,7 @@ export interface CompileError extends ICompileDiagnostic {}
 
 export type CssHashGetter = (args: {
 	name: string;
-	filename: string | undefined;
+	filename: string;
 	css: string;
 	hash: (input: string) => string;
 }) => string;
@@ -85,7 +85,7 @@ export interface CompileOptions extends ModuleCompileOptions {
 	 */
 	accessors?: boolean;
 	/**
-	 * The namespace of the element; e.g., `"html"`, `"svg"`, `"foreign"`.
+	 * The namespace of the element; e.g., `"html"`, `"svg"`, `"mathml"`.
 	 *
 	 * @default 'html'
 	 */
@@ -129,6 +129,8 @@ export interface CompileOptions extends ModuleCompileOptions {
 	 * Set to `undefined` (the default) to infer runes mode from the component code.
 	 * Is always `true` for JS/TS modules compiled with Svelte.
 	 * Will be `true` by default in Svelte 6.
+	 * Note that setting this to `true` in your `svelte.config.js` will force runes mode for your entire project, including components in `node_modules`,
+	 * which is likely not what you want. If you're using Vite, consider using [dynamicCompileOptions](https://github.com/sveltejs/vite-plugin-svelte/blob/main/docs/config.md#dynamiccompileoptions) instead.
 	 * @default undefined
 	 */
 	runes?: boolean | undefined;
@@ -217,11 +219,7 @@ export interface ModuleCompileOptions {
 
 // The following two somewhat scary looking types ensure that certain types are required but can be undefined still
 
-export type ValidatedModuleCompileOptions = Omit<
-	Required<ModuleCompileOptions>,
-	'filename' | 'rootDir'
-> & {
-	filename: ModuleCompileOptions['filename'];
+export type ValidatedModuleCompileOptions = Omit<Required<ModuleCompileOptions>, 'rootDir'> & {
 	rootDir: ModuleCompileOptions['rootDir'];
 };
 
@@ -269,7 +267,7 @@ export interface Binding {
 	 * - `snippet`: A snippet parameter
 	 * - `store_sub`: A $store value
 	 * - `legacy_reactive`: A `$:` declaration
-	 * - `legacy_reactive_import`: An imported binding that is mutated inside the component
+	 * - `template`: A binding declared in the template, e.g. in an `await` block or `const` tag
 	 */
 	kind:
 		| 'normal'
@@ -277,13 +275,13 @@ export interface Binding {
 		| 'bindable_prop'
 		| 'rest_prop'
 		| 'state'
-		| 'frozen_state'
+		| 'raw_state'
 		| 'derived'
 		| 'each'
 		| 'snippet'
 		| 'store_sub'
 		| 'legacy_reactive'
-		| 'legacy_reactive_import';
+		| 'template';
 	declaration_kind: DeclarationKind;
 	/**
 	 * What the value was initialized with.
@@ -300,23 +298,27 @@ export interface Binding {
 	references: { node: Identifier; path: SvelteNode[] }[];
 	mutated: boolean;
 	reassigned: boolean;
+	/** `true` if mutated _or_ reassigned */
+	updated: boolean;
 	scope: Scope;
 	/** For `legacy_reactive`: its reactive dependencies */
 	legacy_dependencies: Binding[];
 	/** Legacy props: the `class` in `{ export klass as class}`. $props(): The `class` in { class: klass } = $props() */
 	prop_alias: string | null;
-	/**
-	 * If this is set, all references should use this expression instead of the identifier name.
-	 * If a function is given, it will be called with the identifier at that location and should return the new expression.
-	 */
-	expression: Expression | ((id: Identifier) => Expression) | null;
-	/** If this is set, all mutations should use this expression */
-	mutation: ((assignment: AssignmentExpression, context: Context<any, any>) => Expression) | null;
 	/** Additional metadata, varies per binding type */
 	metadata: {
 		/** `true` if is (inside) a rest parameter */
 		inside_rest?: boolean;
 	} | null;
+}
+
+export interface ExpressionMetadata {
+	/** All the bindings that are referenced inside this expression */
+	dependencies: Set<Binding>;
+	/** True if the expression references state directly, or _might_ (via member/call expressions) */
+	has_state: boolean;
+	/** True if the expression involves a call expression (often, it will need to be wrapped in a derived) */
+	has_call: boolean;
 }
 
 export * from './template.js';

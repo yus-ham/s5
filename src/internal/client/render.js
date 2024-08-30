@@ -1,12 +1,15 @@
+/** @import { ComponentContext, Effect, TemplateNode } from '#client' */
+/** @import { Component, ComponentType, SvelteComponent } from '../../index.js' */
 import { DEV } from 'esm-env';
-import { clear_text_content, empty, init_operations } from './dom/operations.js';
 import {
-	HYDRATION_END,
-	HYDRATION_ERROR,
-	HYDRATION_START,
-	PassiveDelegatedEvents
-} from '../../constants.js';
-import { flush_sync, push, pop, current_component_context, current_effect } from './runtime.js';
+	clear_text_content,
+	create_text,
+	get_first_child,
+	get_next_sibling,
+	init_operations
+} from './dom/operations.js';
+import { HYDRATION_END, HYDRATION_ERROR, HYDRATION_START } from '../../constants.js';
+import { push, pop, current_component_context, current_effect } from './runtime.js';
 import { effect_root, branch } from './reactivity/effects.js';
 import {
 	hydrate_next,
@@ -25,6 +28,7 @@ import { reset_head_anchor } from './dom/blocks/svelte-head.js';
 import * as w from './warnings.js';
 import * as e from './errors.js';
 import { assign_nodes } from './dom/template.js';
+import { is_passive_event } from '../../utils.js';
 
 /**
  * This is normally true — block effects should run their intro transitions —
@@ -45,11 +49,10 @@ export function set_should_intro(value) {
  */
 export function set_text(text, value) {
 	// @ts-expect-error
-	const prev = (text.__t ??= text.nodeValue);
-
-	if (prev !== value) {
+	if (value !== (text.__t ??= text.nodeValue)) {
 		// @ts-expect-error
-		text.nodeValue = text.__t = value;
+		text.__t = value;
+		text.nodeValue = value == null ? '' : value + '';
 	}
 }
 
@@ -59,7 +62,7 @@ export function set_text(text, value) {
  *
  * @template {Record<string, any>} Props
  * @template {Record<string, any>} Exports
- * @param {import('../../index.js').ComponentType<import('../../index.js').SvelteComponent<Props>> | import('../../index.js').Component<Props, Exports, any>} component
+ * @param {ComponentType<SvelteComponent<Props>> | Component<Props, Exports, any>} component
  * @param {{} extends Props ? {
  * 		target: Document | Element | ShadowRoot;
  * 		anchor?: Node;
@@ -78,9 +81,8 @@ export function set_text(text, value) {
  * @returns {Exports}
  */
 export function mount(component, options) {
-	const anchor = options.anchor ?? options.target.appendChild(empty());
-	// Don't flush previous effects to ensure order of outer effects stays consistent
-	return flush_sync(() => _mount(component, { ...options, anchor }), false);
+	const anchor = options.anchor ?? options.target.appendChild(create_text());
+	return _mount(component, { ...options, anchor });
 }
 
 /**
@@ -88,7 +90,7 @@ export function mount(component, options) {
  *
  * @template {Record<string, any>} Props
  * @template {Record<string, any>} Exports
- * @param {import('../../index.js').ComponentType<import('../../index.js').SvelteComponent<Props>> | import('../../index.js').Component<Props, Exports, any>} component
+ * @param {ComponentType<SvelteComponent<Props>> | Component<Props, Exports, any>} component
  * @param {{} extends Props ? {
  * 		target: Document | Element | ShadowRoot;
  * 		props?: Props;
@@ -107,51 +109,45 @@ export function mount(component, options) {
  * @returns {Exports}
  */
 export function hydrate(component, options) {
+	init_operations();
 	options.intro = options.intro ?? false;
 	const target = options.target;
 	const was_hydrating = hydrating;
 	const previous_hydrate_node = hydrate_node;
 
 	try {
-		// Don't flush previous effects to ensure order of outer effects stays consistent
-		return flush_sync(() => {
-			var anchor = /** @type {import('#client').TemplateNode} */ (target.firstChild);
-			while (
-				anchor &&
-				(anchor.nodeType !== 8 || /** @type {Comment} */ (anchor).data !== HYDRATION_START)
-			) {
-				anchor = /** @type {import('#client').TemplateNode} */ (anchor.nextSibling);
-			}
+		var anchor = /** @type {TemplateNode} */ (get_first_child(target));
+		while (
+			anchor &&
+			(anchor.nodeType !== 8 || /** @type {Comment} */ (anchor).data !== HYDRATION_START)
+		) {
+			anchor = /** @type {TemplateNode} */ (get_next_sibling(anchor));
+		}
 
-			if (!anchor) {
-				throw HYDRATION_ERROR;
-			}
+		if (!anchor) {
+			throw HYDRATION_ERROR;
+		}
 
-			set_hydrating(true);
-			set_hydrate_node(/** @type {Comment} */ (anchor));
-			hydrate_next();
+		set_hydrating(true);
+		set_hydrate_node(/** @type {Comment} */ (anchor));
+		hydrate_next();
 
-			const instance = _mount(component, { ...options, anchor });
+		const instance = _mount(component, { ...options, anchor });
 
-			if (
-				hydrate_node.nodeType !== 8 ||
-				/** @type {Comment} */ (hydrate_node).data !== HYDRATION_END
-			) {
-				w.hydration_mismatch();
-				throw HYDRATION_ERROR;
-			}
+		if (
+			hydrate_node === null ||
+			hydrate_node.nodeType !== 8 ||
+			/** @type {Comment} */ (hydrate_node).data !== HYDRATION_END
+		) {
+			w.hydration_mismatch();
+			throw HYDRATION_ERROR;
+		}
 
-			// flush_sync will run this callback and then synchronously run any pending effects,
-			// which don't belong to the hydration phase anymore - therefore reset it here
-			set_hydrating(false);
+		set_hydrating(false);
 
-			return instance;
-		}, false);
+		return /**  @type {Exports} */ (instance);
 	} catch (error) {
 		if (error === HYDRATION_ERROR) {
-			// TODO it's possible for event listeners to have been added and
-			// not removed, e.g. with `<svelte:window>` or `<svelte:document>`
-
 			if (options.recover === false) {
 				e.hydration_failed();
 			}
@@ -177,7 +173,7 @@ const document_listeners = new Map();
 
 /**
  * @template {Record<string, any>} Exports
- * @param {import('../../index.js').ComponentType<import('../../index.js').SvelteComponent<any>> | import('../../index.js').Component<any>} Component
+ * @param {ComponentType<SvelteComponent<any>> | Component<any>} Component
  * @param {{
  * 		target: Document | Element | ShadowRoot;
  * 		anchor: Node;
@@ -201,7 +197,7 @@ function _mount(Component, { target, anchor, props = {}, events, context, intro 
 			if (registered_events.has(event_name)) continue;
 			registered_events.add(event_name);
 
-			var passive = PassiveDelegatedEvents.includes(event_name);
+			var passive = is_passive_event(event_name);
 
 			// Add the event listener to both the container and the document.
 			// The container listener ensures we catch events from within in case
@@ -232,7 +228,7 @@ function _mount(Component, { target, anchor, props = {}, events, context, intro 
 		branch(() => {
 			if (context) {
 				push({});
-				var ctx = /** @type {import('#client').ComponentContext} */ (current_component_context);
+				var ctx = /** @type {ComponentContext} */ (current_component_context);
 				ctx.c = context;
 			}
 
@@ -242,7 +238,7 @@ function _mount(Component, { target, anchor, props = {}, events, context, intro 
 			}
 
 			if (hydrating) {
-				assign_nodes(/** @type {import('#client').TemplateNode} */ (anchor), null);
+				assign_nodes(/** @type {TemplateNode} */ (anchor), null);
 			}
 
 			should_intro = intro;
@@ -251,9 +247,7 @@ function _mount(Component, { target, anchor, props = {}, events, context, intro 
 			should_intro = true;
 
 			if (hydrating) {
-				/** @type {import('#client').Effect & { nodes: import('#client').EffectNodes }} */ (
-					current_effect
-				).nodes.end = hydrate_node;
+				/** @type {Effect} */ (current_effect).nodes_end = hydrate_node;
 			}
 
 			if (context) {
@@ -296,10 +290,10 @@ let mounted_components = new WeakMap();
  */
 export function unmount(component) {
 	const fn = mounted_components.get(component);
-	if (DEV && !fn) {
+
+	if (fn) {
+		fn();
+	} else if (DEV) {
 		w.lifecycle_double_unmount();
-		// eslint-disable-next-line no-console
-		console.trace('stack trace');
 	}
-	fn?.();
 }

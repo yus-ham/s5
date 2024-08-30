@@ -4,6 +4,10 @@
 
 > `%binding%` (%location%) is binding to a non-reactive property
 
+## event_handler_invalid
+
+> %handler% should be a function. Did you mean to %suggestion%?
+
 ## hydration_attribute_changed
 
 > The `%attribute%` attribute on `%html%` changed its value between server and client renders. The client value, `%value%`, will be ignored in favour of the server value
@@ -40,4 +44,17 @@
 
 ## state_proxy_equality_mismatch
 
-> Reactive `$state(...)` proxies and the values they proxy have different identities. Because of this, comparisons with `%operator%` will produce unexpected results. Consider using `$state.is(a, b)` instead
+> Reactive `$state(...)` proxies and the values they proxy have different identities. Because of this, comparisons with `%operator%` will produce unexpected results
+
+`$state(...)` creates a [proxy](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Proxy) of the value it is passed. The proxy and the value have different identities, meaning equality checks will always return `false`:
+
+```svelte
+<script>
+	let value = { foo: 'bar' };
+	let proxy = $state(value);
+
+	value === proxy; // always false
+</script>
+```
+
+To resolve this, ensure you're comparing values where both values were created with `$state(...)`, or neither were. Note that `$state.raw(...)` will _not_ create a state proxy.

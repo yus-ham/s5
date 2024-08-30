@@ -3,11 +3,12 @@
 import { isIdentifierStart, isIdentifierChar } from 'acorn';
 import fragment from './state/fragment.js';
 import { regex_whitespace } from '../patterns.js';
-import { reserved } from '../../../constants.js';
 import full_char_code_at from './utils/full_char_code_at.js';
 import * as e from '../../errors.js';
 import { create_fragment } from './utils/create.js';
 import read_options from './read/options.js';
+import { is_reserved } from '../../../utils.js';
+import { disallow_children } from '../2-analyze/visitors/shared/special-element.js';
 
 const regex_position_indicator = / \(\d+:\d+\)$/;
 
@@ -133,6 +134,9 @@ export class Parser {
 			const options = /** @type {SvelteOptionsRaw} */ (this.root.fragment.nodes[options_index]);
 			this.root.fragment.nodes.splice(options_index, 1);
 			this.root.options = read_options(options);
+
+			disallow_children(options);
+
 			// We need this for the old AST format
 			Object.defineProperty(this.root.options, '__raw__', {
 				value: options,
@@ -245,7 +249,7 @@ export class Parser {
 
 		const identifier = this.template.slice(this.index, (this.index = i));
 
-		if (!allow_reserved && reserved.includes(identifier)) {
+		if (!allow_reserved && is_reserved(identifier)) {
 			e.unexpected_reserved_word(start, identifier);
 		}
 
